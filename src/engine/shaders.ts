@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 
+const GLSL_SAFE_MATH = /* glsl */ `
+  vec3 safeNorm(vec3 v) {
+    return v * inversesqrt(max(dot(v, v), 1e-8));
+  }
+  float safePow(float base, float expVal) {
+    return pow(max(base, 1e-4), expVal);
+  }
+`;
+
 /**
  * Clever 2.5D / Pseudo-3D Telescope Image Perspective Shader!
  * - When `uSpherical > 0.5` (Planetary / Spherical Lensing Mode):
@@ -33,6 +42,7 @@ export function createTelescope25DMaterial(params: {
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
 
       uniform sampler2D uMap;
       uniform float uSpherical;
@@ -45,23 +55,20 @@ export function createTelescope25DMaterial(params: {
 
       void main() {
         vUv = uv;
-        vNormalOS = normalize(normal);
+        vNormalOS = safeNorm(normal);
 
-        // Compute object-space camera position for genuine perspective parallax as user orbits!
         vec3 camPosOS = (inverse(modelMatrix) * vec4(cameraPosition, 1.0)).xyz;
         vec3 pos = position;
 
         if (uSpherical < 0.5) {
-          // Sample telescope brightness to extrude 3D relief silhouette on subdivided plane
           vec4 tex = texture2D(uMap, uv);
           float lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
           float radial = smoothstep(0.52, 0.08, length(uv - 0.5));
           pos.z += (lum - 0.25) * uDepth * 0.9 * radial;
-          // Subtle ellipsoidal dome curvature
           pos.z += radial * uDepth * 0.35;
         }
 
-        vViewDirOS = normalize(camPosOS - pos);
+        vViewDirOS = safeNorm(camPosOS - pos);
 
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
@@ -71,6 +78,7 @@ export function createTelescope25DMaterial(params: {
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform sampler2D uMap;
       uniform vec3 uTint;
@@ -91,38 +99,33 @@ export function createTelescope25DMaterial(params: {
       void main() {
         #include <logdepthbuf_fragment>
 
-        vec3 V = normalize(vViewDirOS);
+        vec3 V = safeNorm(vViewDirOS);
 
         if (uSpherical > 0.5) {
-          // Clever Planetary 2.5D Spherical Lensing:
-          // Treat quad/disc as an optical 3D sphere whose apparent surface perspective shifts as V changes!
           vec2 p = (vUv - 0.5) * 2.0;
           float r2 = dot(p, p);
           if (r2 > 1.0) discard;
 
           float zSphere = sqrt(max(0.0, 1.0 - r2));
-          vec3 sphereNormal = normalize(vec3(p.x, p.y, zSphere));
+          vec3 sphereNormal = safeNorm(vec3(p.x, p.y, zSphere));
 
-          // Shift spherical coordinates subtly with camera orbit angle for convincing 3D rotation perspective!
           vec2 orbitShift = V.xy * uDepth * 0.65;
-          float lon = atan(sphereNormal.x + orbitShift.x, sphereNormal.z) / (PI * 0.52);
+          float lon = atan(sphereNormal.x + orbitShift.x, max(1e-4, sphereNormal.z)) / (PI * 0.52);
           float lat = asin(clamp(sphereNormal.y + orbitShift.y * 0.6, -0.99, 0.99)) / (PI * 0.52);
 
           vec2 sphereUv = clamp(vec2(lon, lat) * 0.44 + 0.5, 0.02, 0.98);
 
-          // Micro-relief bump normal from telescope image luminance gradient
           float hC = getHeight(sphereUv);
           float hX = getHeight(sphereUv + vec2(0.006, 0.0));
           float hY = getHeight(sphereUv + vec2(0.0, 0.006));
-          vec3 bumpN = normalize(sphereNormal + vec3((hC - hX) * 2.2, (hC - hY) * 2.2, 0.0));
+          vec3 bumpN = safeNorm(sphereNormal + vec3((hC - hX) * 2.2, (hC - hY) * 2.2, 0.0));
 
-          vec3 lightDir = normalize(vec3(0.55, 0.35, 0.75));
+          vec3 lightDir = safeNorm(vec3(0.55, 0.35, 0.75));
           float diff = clamp(dot(bumpN, lightDir) * 0.65 + 0.48, 0.12, 1.25);
 
           vec3 col = texture2D(uMap, sphereUv).rgb * diff;
 
-          // Atmospheric Fresnel rim glow + smooth antialiasing limb
-          float fresnel = pow(1.0 - zSphere, 3.2);
+          float fresnel = safePow(1.0 - zSphere, 3.2);
           col += uTint * fresnel * 0.45;
           float edgeAlpha = smoothstep(1.0, 0.965, r2);
 
@@ -130,13 +133,13 @@ export function createTelescope25DMaterial(params: {
           return;
         }
 
-        // Volumetric Deep-Space 8-Layer Steep Parallax Ray-Marching (Nebulae, Galaxies, Supernova Remnants)
+        // Volumetric Deep-Space 5-Layer Steep Parallax Ray-Marching
         float distFromCenter = length(vUv - 0.5);
         float edgeMask = smoothstep(0.5, 0.22, distFromCenter);
         if (edgeMask <= 0.003) discard;
 
         vec2 parallaxDir = (V.xy / max(0.32, abs(V.z))) * uDepth * 0.18;
-        const int STEPS = 8;
+        const int STEPS = 5;
         vec3 accum = vec3(0.0);
         float weightSum = 0.0;
 
@@ -145,15 +148,13 @@ export function createTelescope25DMaterial(params: {
           vec2 sampleUv = clamp(vUv + parallaxDir * t, 0.004, 0.996);
           vec3 sampleCol = texture2D(uMap, sampleUv).rgb;
           float lum = dot(sampleCol, vec3(0.299, 0.587, 0.114));
-          // Weight brighter layers toward front, darker filament dust toward rear
           float layerMatch = 1.0 - abs(t - (lum - 0.45) * 0.85);
           float w = max(0.08, layerMatch * layerMatch);
           accum += sampleCol * w;
           weightSum += w;
         }
 
-        vec3 finalCol = (accum / max(0.001, weightSum));
-        // Subtle view-angle rim enhancement so volume shimmers naturally during 3D flybys
+        vec3 finalCol = accum / max(0.001, weightSum);
         float obliqueBoost = 1.0 + (1.0 - abs(V.z)) * 0.28;
         finalCol *= mix(vec3(1.0), uTint, 0.18) * obliqueBoost;
 
@@ -166,8 +167,6 @@ export function createTelescope25DMaterial(params: {
 
 /**
  * Physically-driven Procedural 3D Planet / Exoplanet Shader
- * Renders oceans, continents, clouds, craters, lava fissures, or turbulent gas-giant bands
- * directly from real NASA Exoplanet Archive parameters!
  */
 export function createProceduralPlanetMaterial(params: {
   planetType: string;
@@ -176,7 +175,7 @@ export function createProceduralPlanetMaterial(params: {
   baseColor: string;
   seed: number;
 }): THREE.ShaderMaterial {
-  let mode = 0; // 0 = Rocky barren, 1 = Habitable/Earth-like, 2 = Gas/Ice Giant, 3 = Lava World
+  let mode = 0;
   if (params.planetType === 'Lava World' || params.tempK > 1250) {
     mode = 3;
   } else if (params.planetType === 'Gas Giant' || params.planetType === 'Ice Giant') {
@@ -196,16 +195,17 @@ export function createProceduralPlanetMaterial(params: {
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
 
       varying vec3 vNormalWS;
       varying vec3 vPosOS;
       varying vec3 vViewDirWS;
 
       void main() {
-        vPosOS = normalize(position);
+        vPosOS = safeNorm(position);
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vNormalWS = normalize(mat3(modelMatrix) * normal);
-        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        vNormalWS = safeNorm(mat3(modelMatrix) * normal);
+        vViewDirWS = safeNorm(cameraPosition - worldPos.xyz);
         gl_Position = projectionMatrix * viewMatrix * worldPos;
         #include <logdepthbuf_vertex>
       }
@@ -213,6 +213,7 @@ export function createProceduralPlanetMaterial(params: {
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform vec3 uBaseColor;
       uniform float uMode;
@@ -246,7 +247,7 @@ export function createProceduralPlanetMaterial(params: {
       float fbm(vec3 p) {
         float v = 0.0;
         float a = 0.5;
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 4; i++) {
           v += a * noise(p);
           p *= 2.04;
           a *= 0.5;
@@ -257,27 +258,25 @@ export function createProceduralPlanetMaterial(params: {
       void main() {
         #include <logdepthbuf_fragment>
 
-        vec3 N = normalize(vNormalWS);
-        vec3 V = normalize(vViewDirWS);
-        vec3 L = normalize(uSunDir);
+        vec3 N = safeNorm(vNormalWS);
+        vec3 V = safeNorm(vViewDirWS);
+        vec3 L = safeNorm(uSunDir);
 
         float ndotl = max(0.0, dot(N, L));
         float dayLight = smoothstep(-0.12, 0.85, dot(N, L)) * 0.92 + 0.08;
-        float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.2);
+        float fresnel = safePow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.2);
 
         vec3 p = vPosOS;
         vec3 surfCol = uBaseColor;
         vec3 emissive = vec3(0.0);
 
         if (uMode > 2.5) {
-          // Lava World: Dark basalt plates + glowing incandescent magma cracks
           float n = fbm(p * 4.5 + vec3(uTime * 0.02));
           float cracks = smoothstep(0.46, 0.53, n);
           surfCol = mix(vec3(0.09, 0.06, 0.06), vec3(0.25, 0.12, 0.08), n);
           emissive = mix(vec3(1.0, 0.28, 0.03), vec3(1.0, 0.82, 0.25), smoothstep(0.5, 0.68, n)) * cracks * 1.35;
           emissive += vec3(0.95, 0.22, 0.02) * fresnel * 0.55;
         } else if (uMode > 1.5) {
-          // Gas / Ice Giant: Zonal jet-stream bands + turbulent storm eddies
           float turb = fbm(p * 3.8 + vec3(uTime * 0.03, 0.0, 0.0));
           float bands = sin(p.y * 18.0 + turb * 5.2);
           vec3 lightBand = mix(uBaseColor, vec3(0.98, 0.95, 0.88), 0.38);
@@ -285,29 +284,23 @@ export function createProceduralPlanetMaterial(params: {
           surfCol = mix(darkBand, lightBand, bands * 0.5 + 0.5);
           emissive = uBaseColor * fresnel * 0.35;
         } else if (uMode > 0.5) {
-          // Habitable / Ocean-Continent World + Specular Oceans + Cloud Deck + Rayleigh Sky
           float elev = fbm(p * 3.6);
           float isLand = smoothstep(0.49, 0.525, elev);
           vec3 ocean = mix(vec3(0.04, 0.18, 0.46), vec3(0.08, 0.42, 0.68), smoothstep(0.32, 0.49, elev));
           vec3 land = mix(vec3(0.14, 0.44, 0.20), vec3(0.55, 0.46, 0.32), smoothstep(0.53, 0.75, elev));
-          // Polar ice caps
           float ice = smoothstep(0.74, 0.88, abs(p.y) + elev * 0.14);
           surfCol = mix(ocean, land, isLand);
           surfCol = mix(surfCol, vec3(0.93, 0.96, 1.0), ice);
 
-          // Ocean sun glint
-          vec3 H = normalize(L + V);
-          float spec = pow(max(0.0, dot(N, H)), 36.0) * (1.0 - isLand) * (1.0 - ice) * ndotl;
+          vec3 H = safeNorm(L + V);
+          float spec = safePow(max(0.0, dot(N, H)), 36.0) * (1.0 - isLand) * (1.0 - ice) * ndotl;
           surfCol += vec3(0.65, 0.82, 1.0) * spec * 0.55;
 
-          // Swirling clouds
           float clouds = smoothstep(0.54, 0.72, fbm(p * 4.4 + vec3(uTime * 0.025, 0.0, uTime * 0.01)));
           surfCol = mix(surfCol, vec3(0.97, 0.99, 1.0), clouds * 0.62);
 
-          // Rayleigh blue atmosphere rim
           emissive = vec3(0.24, 0.62, 1.0) * fresnel * (0.45 + 0.4 * ndotl);
         } else {
-          // Rocky Terrestrial / Cratered Regolith
           float n = fbm(p * 5.2);
           float detail = fbm(p * 14.0);
           surfCol = uBaseColor * (0.68 + 0.55 * n) * (0.85 + 0.3 * detail);
@@ -334,16 +327,17 @@ export function createStarSurfaceMaterial(starColor: string): THREE.ShaderMateri
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
 
       varying vec3 vPosOS;
       varying vec3 vNormalWS;
       varying vec3 vViewDirWS;
 
       void main() {
-        vPosOS = normalize(position);
+        vPosOS = safeNorm(position);
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vNormalWS = normalize(mat3(modelMatrix) * normal);
-        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        vNormalWS = safeNorm(mat3(modelMatrix) * normal);
+        vViewDirWS = safeNorm(cameraPosition - worldPos.xyz);
         gl_Position = projectionMatrix * viewMatrix * worldPos;
         #include <logdepthbuf_vertex>
       }
@@ -351,6 +345,7 @@ export function createStarSurfaceMaterial(starColor: string): THREE.ShaderMateri
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform vec3 uColor;
       uniform float uTime;
@@ -383,10 +378,10 @@ export function createStarSurfaceMaterial(starColor: string): THREE.ShaderMateri
 
         vec3 p = vPosOS * 8.0 + vec3(uTime * 0.18, -uTime * 0.12, uTime * 0.09);
         float gran = noise(p) * 0.55 + noise(p * 2.4) * 0.3 + noise(p * 5.2) * 0.15;
-        float ndotv = max(0.0, dot(normalize(vNormalWS), normalize(vViewDirWS)));
-        float limb = pow(ndotv, 0.45);
-        vec3 core = mix(uColor * 0.72, vec3(1.0, 0.99, 0.94), gran * limb);
-        vec3 rim = uColor * pow(1.0 - ndotv, 2.2) * 1.4;
+        float ndotv = clamp(dot(safeNorm(vNormalWS), safeNorm(vViewDirWS)), 0.0, 1.0);
+        float limb = safePow(ndotv, 0.45);
+        vec3 core = mix(uColor * 0.78, vec3(1.0, 0.99, 0.94), gran * limb);
+        vec3 rim = uColor * safePow(1.0 - ndotv, 2.2) * 1.25;
         gl_FragColor = vec4(core + rim, 1.0);
       }
     `,
@@ -443,7 +438,6 @@ export function createHabitableZoneMaterial(): THREE.ShaderMaterial {
 
 /**
  * GPU Point-Cloud Shader with Logarithmic Depth Buffer + Per-Point Filter Alpha/Highlight
- * Powers 6,800+ 3D Stars, 6,400+ Exoplanets, 450+ Satellites, Milky Way Spiral Arms & Cosmic Web at 60 FPS!
  */
 export function createCosmicPointsMaterial(params: {
   baseSizePx: number;
@@ -457,8 +451,8 @@ export function createCosmicPointsMaterial(params: {
     blending: THREE.AdditiveBlending,
     uniforms: {
       uBaseSize: { value: params.baseSizePx },
-      uMaxSize: { value: params.maxSizePx ?? 36.0 },
-      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) },
+      uMaxSize: { value: params.maxSizePx ?? 32.0 },
+      uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 1.5) },
       uSpikes: { value: params.diffractionSpikes ? 1.0 : 0.0 },
       uGlobalOpacity: { value: params.opacity ?? 1.0 },
     },
@@ -496,6 +490,7 @@ export function createCosmicPointsMaterial(params: {
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform float uSpikes;
       uniform float uGlobalOpacity;
@@ -505,15 +500,15 @@ export function createCosmicPointsMaterial(params: {
       varying float vHighlight;
 
       void main() {
-        if (vAlpha <= 0.005) discard;
+        if (vAlpha <= 0.005 || uGlobalOpacity <= 0.005) discard;
         #include <logdepthbuf_fragment>
 
         vec2 p = (gl_PointCoord - 0.5) * 2.0;
         float d = length(p);
         if (d > 1.0) discard;
 
-        float core = exp(-d * d * 7.5);
-        float halo = pow(max(0.0, 1.0 - d), 2.4) * 0.55;
+        float core = exp(-d * d * 7.2);
+        float halo = safePow(1.0 - d, 2.3) * 0.62;
 
         float spikes = 0.0;
         if (uSpikes > 0.5) {
@@ -521,23 +516,21 @@ export function createCosmicPointsMaterial(params: {
                     exp(-abs(p.y) * 16.0) * exp(-abs(p.x) * 2.4)) * 0.35;
         }
 
-        // Tactical highlight reticle ring when object matches user's Highlight filter!
         float ring = 0.0;
         if (vHighlight > 0.5) {
           ring = smoothstep(0.11, 0.0, abs(d - 0.78)) * 0.95;
         }
 
         float intensity = core + halo + spikes + ring;
-        vec3 col = mix(vColor, vec3(1.0), core * 0.65) + vec3(0.25, 0.95, 0.85) * ring * 0.5;
+        vec3 col = mix(vColor, vec3(1.0), core * 0.68) + vec3(0.25, 0.95, 0.85) * ring * 0.5;
         gl_FragColor = vec4(col, clamp(intensity * vAlpha * uGlobalOpacity, 0.0, 1.0));
       }
     `,
   });
 }
 
-
 /**
- * Photorealistic 3D Earth Shader:
+ * Photorealistic 3D Earth Shader (100% NaN-Safe on Windows ANGLE/D3D11 + Mobile GPUs!):
  * Blends NASA Blue Marble Day Map + Night-Side City Lights + Drifting Cloud Deck + Specular Glint + Rayleigh Sky Halo!
  */
 export function createTexturedEarthMaterial(params: {
@@ -556,6 +549,7 @@ export function createTexturedEarthMaterial(params: {
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
 
       varying vec2 vUv;
       varying vec3 vNormalWS;
@@ -564,8 +558,8 @@ export function createTexturedEarthMaterial(params: {
       void main() {
         vUv = uv;
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vNormalWS = normalize(mat3(modelMatrix) * normal);
-        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        vNormalWS = safeNorm(mat3(modelMatrix) * normal);
+        vViewDirWS = safeNorm(cameraPosition - worldPos.xyz);
         gl_Position = projectionMatrix * viewMatrix * worldPos;
         #include <logdepthbuf_vertex>
       }
@@ -573,6 +567,7 @@ export function createTexturedEarthMaterial(params: {
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform sampler2D uDayMap;
       uniform sampler2D uNightMap;
@@ -587,38 +582,37 @@ export function createTexturedEarthMaterial(params: {
       void main() {
         #include <logdepthbuf_fragment>
 
-        vec3 N = normalize(vNormalWS);
-        vec3 V = normalize(vViewDirWS);
-        vec3 L = normalize(uSunDir);
+        vec3 N = safeNorm(vNormalWS);
+        vec3 V = safeNorm(vViewDirWS);
+        vec3 L = safeNorm(uSunDir);
 
         float cosTheta = dot(N, L);
         float dayFactor = smoothstep(-0.16, 0.24, cosTheta);
-        float diffuse = max(0.04, smoothstep(-0.08, 0.92, cosTheta));
+        float diffuse = max(0.05, smoothstep(-0.08, 0.92, cosTheta));
 
         vec3 dayTex = texture2D(uDayMap, vUv).rgb;
         vec3 nightTex = texture2D(uNightMap, vUv).rgb;
 
-        // Subtle drifting cloud UVs
         vec2 cloudUv = vec2(fract(vUv.x + uTime * 0.0018), vUv.y);
         float cloudVal = texture2D(uCloudsMap, cloudUv).r;
 
-        // Specular sun glint over oceans (where blue dominates red/green)
         float oceanMask = clamp((dayTex.b - max(dayTex.r, dayTex.g) * 0.85) * 4.5, 0.0, 1.0) * (1.0 - cloudVal);
-        vec3 H = normalize(L + V);
-        float spec = pow(max(0.0, dot(N, H)), 42.0) * oceanMask * max(0.0, cosTheta);
+        vec3 H = safeNorm(L + V);
+        float spec = safePow(max(0.0, dot(N, H)), 42.0) * oceanMask * max(0.0, cosTheta);
 
-        vec3 litDay = mix(dayTex, vec3(0.98, 0.99, 1.0), cloudVal * 0.78) * diffuse + vec3(0.75, 0.88, 1.0) * spec * 0.55;
-        vec3 litNight = nightTex * vec3(1.25, 0.96, 0.65) * (1.0 - cloudVal * 0.65) * 1.15 + dayTex * 0.03;
+        vec3 litDay = mix(dayTex * 1.12, vec3(0.98, 0.99, 1.0), cloudVal * 0.76) * diffuse + vec3(0.75, 0.88, 1.0) * spec * 0.55;
+        vec3 litNight = nightTex * vec3(1.35, 1.02, 0.68) * (1.0 - cloudVal * 0.6) * 1.25 + dayTex * 0.035;
 
         vec3 surface = mix(litNight, litDay, dayFactor);
 
-        // Warm sunset twilight band along terminator + Rayleigh blue atmospheric rim
-        float twilight = exp(-pow(cosTheta * 5.5, 2.0)) * 0.24;
-        float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.0);
-        vec3 atmoColor = mix(vec3(0.12, 0.38, 0.88), vec3(0.32, 0.72, 1.0), dayFactor);
-        vec3 twilightColor = vec3(1.0, 0.42, 0.16) * twilight * fresnel * 1.6;
+        // Warm sunset twilight band (using ct * ct instead of pow(negative, 2.0)!)
+        float ct = cosTheta * 5.5;
+        float twilight = exp(-ct * ct) * 0.26;
+        float fresnel = safePow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0);
+        vec3 atmoColor = mix(vec3(0.14, 0.42, 0.95), vec3(0.35, 0.76, 1.0), dayFactor);
+        vec3 twilightColor = vec3(1.0, 0.44, 0.18) * twilight * fresnel * 1.6;
 
-        gl_FragColor = vec4(surface + atmoColor * fresnel * (0.35 + 0.55 * dayFactor) + twilightColor, 1.0);
+        gl_FragColor = vec4(surface + atmoColor * fresnel * (0.38 + 0.58 * dayFactor) + twilightColor, 1.0);
       }
     `,
   });
@@ -642,6 +636,7 @@ export function createTexturedPlanetMaterial(params: {
     vertexShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
 
       varying vec2 vUv;
       varying vec3 vNormalWS;
@@ -650,8 +645,8 @@ export function createTexturedPlanetMaterial(params: {
       void main() {
         vUv = uv;
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vNormalWS = normalize(mat3(modelMatrix) * normal);
-        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        vNormalWS = safeNorm(mat3(modelMatrix) * normal);
+        vViewDirWS = safeNorm(cameraPosition - worldPos.xyz);
         gl_Position = projectionMatrix * viewMatrix * worldPos;
         #include <logdepthbuf_vertex>
       }
@@ -659,6 +654,7 @@ export function createTexturedPlanetMaterial(params: {
     fragmentShader: /* glsl */ `
       #include <common>
       #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
 
       uniform sampler2D uMap;
       uniform vec3 uAtmoColor;
@@ -672,13 +668,13 @@ export function createTexturedPlanetMaterial(params: {
       void main() {
         #include <logdepthbuf_fragment>
 
-        vec3 N = normalize(vNormalWS);
-        vec3 V = normalize(vViewDirWS);
-        vec3 L = normalize(uSunDir);
+        vec3 N = safeNorm(vNormalWS);
+        vec3 V = safeNorm(vViewDirWS);
+        vec3 L = safeNorm(uSunDir);
 
         float diff = smoothstep(-0.18, 0.88, dot(N, L)) * 0.93 + 0.07;
-        vec3 tex = texture2D(uMap, vUv).rgb;
-        float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.2);
+        vec3 tex = texture2D(uMap, vUv).rgb * 1.08;
+        float fresnel = safePow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.2);
 
         gl_FragColor = vec4(tex * diff + uAtmoColor * fresnel * uAtmoStrength, 1.0);
       }
@@ -722,7 +718,6 @@ export function createPlanetaryRingMaterial(colorHex: string, isSaturn: boolean)
 
         if (uIsSaturn > 0.5) {
           float t = clamp((r - 1.28) / (2.38 - 1.28), 0.0, 1.0);
-          // Cassini division gap around t = 0.63 + fine ringlets
           float cassiniGap = 1.0 - smoothstep(0.04, 0.0, abs(t - 0.64)) * 0.88;
           float enckeGap = 1.0 - smoothstep(0.015, 0.0, abs(t - 0.88)) * 0.7;
           float fineBands = 0.72 + 0.28 * sin(t * 95.0) * cos(t * 37.0);
@@ -731,7 +726,8 @@ export function createPlanetaryRingMaterial(colorHex: string, isSaturn: boolean)
           gl_FragColor = vec4(ringCol, edgeFade * cassiniGap * enckeGap * 0.78);
         } else {
           float t = clamp((r - 1.45) / (1.88 - 1.45), 0.0, 1.0);
-          float ringlets = pow(0.5 + 0.5 * sin(t * 42.0), 2.0);
+          float s = 0.5 + 0.5 * sin(t * 42.0);
+          float ringlets = s * s;
           float edgeFade = smoothstep(0.0, 0.1, t) * smoothstep(1.0, 0.9, t);
           gl_FragColor = vec4(uColor, edgeFade * ringlets * 0.35);
         }

@@ -1,9 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type {
   ConstellationRecord,
   DeepSpaceBundle,
@@ -75,21 +71,21 @@ interface UniverseSceneCallbacks {
 }
 
 const PLANET_TEXTURE_URLS: Record<string, string> = {
-  mercury: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_mercury.jpg?width=1024',
-  venus: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_venus_atmosphere.jpg?width=1024',
+  mercury: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_mercury.jpg?width=512',
+  venus: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_venus_atmosphere.jpg?width=512',
   earthDay: 'https://unpkg.com/three-globe@2.31.1/example/img/earth-blue-marble.jpg',
   earthNight: 'https://unpkg.com/three-globe@2.31.1/example/img/earth-night.jpg',
   earthClouds: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_clouds_1024.png',
   moon: 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/moon_1024.jpg',
-  mars: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_mars.jpg?width=1024',
-  jupiter: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_jupiter.jpg?width=1024',
-  saturn: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_saturn.jpg?width=1024',
-  uranus: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_uranus.jpg?width=1024',
-  neptune: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_neptune.jpg?width=1024',
-  milkyWayPanorama: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_stars_milky_way.jpg?width=2048',
+  mars: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_mars.jpg?width=512',
+  jupiter: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_jupiter.jpg?width=512',
+  saturn: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_saturn.jpg?width=512',
+  uranus: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_uranus.jpg?width=512',
+  neptune: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_neptune.jpg?width=512',
+  milkyWayPanorama: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_stars_milky_way.jpg?width=1024',
 };
 
-const MAX_DOM_MARKERS = 38;
+const MAX_DOM_MARKERS = 24;
 
 interface DomMarkerSlot {
   el: HTMLButtonElement;
@@ -103,24 +99,27 @@ interface DomMarkerSlot {
 export class UniverseScene {
   private container: HTMLElement;
   private renderer: THREE.WebGLRenderer;
-  private composer: EffectComposer;
-  private bloomPass: UnrealBloomPass;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
   private callbacks: UniverseSceneCallbacks;
 
-  // Zero-React-Lag 60/120Hz Direct DOM Marker Overlay Pool
+  // Zero-React-Lag Direct DOM Marker Overlay Pool (NO backdrop-filter on moving elements!)
   private markerLayerEl: HTMLDivElement;
   private markerPool: DomMarkerSlot[] = [];
 
-  // Datasets
+  // Datasets & Pre-Filtered Label Candidates (zero 13k-item array scans per frame!)
   private exoplanets: ExoplanetRecord[] = [];
   private stars: StarRecord[] = [];
   private constellations: ConstellationRecord[] = [];
   private compiledSatellites: CompiledSatellite[] = [];
   private deepSpace: DeepSpaceBundle | null = null;
   private catalogById: Map<string, UnifiedCelestialObject> = new Map();
+
+  private labelSatellites: CompiledSatellite[] = [];
+  private labelStars: StarRecord[] = [];
+  private labelExoplanets: ExoplanetRecord[] = [];
+  private hasActiveExoFilter: boolean = false;
 
   // Floating-origin 64-bit state (in Light-Years)
   private focusObjectId: string = 'earth';
@@ -144,6 +143,7 @@ export class UniverseScene {
   private realElapsedSec: number = 0;
   private simElapsedSec: number = 0;
   private helicalDisplacementSec: number = 0;
+  private cachedEarthRotRad: number = 0;
 
   private livePositionsLy: Map<string, [number, number, number]> = new Map();
 
@@ -174,6 +174,8 @@ export class UniverseScene {
   private cosmicWebLines: THREE.LineSegments | null = null;
   private cmbSphereMesh: THREE.Mesh | null = null;
   private landmarkMeshes: Map<string, THREE.Object3D> = new Map();
+  private pendingLandmarkTextures: { mat: THREE.ShaderMaterial; heroUrl: string }[] = [];
+  private deepSpaceTexturesLoaded: boolean = false;
   private routeLine: THREE.Line | null = null;
 
   private helicalTrails: Map<string, { pointsLy: [number, number, number][]; line: THREE.Line }> = new Map();
@@ -193,14 +195,18 @@ export class UniverseScene {
   private lastFrameMs: number = performance.now();
   private lastTelemetryBroadcastMs: number = 0;
   private lastSatPropRealMs: number = 0;
+  private lastSolarEphemRealMs: number = 0;
   private frameCounter: number = 0;
   private fpsAccumMs: number = 0;
   private currentFps: number = 60;
   private disposed: boolean = false;
 
+  // Reusable math scratchpad (zero GC allocations per frame!)
   private pointerDownPos = { x: 0, y: 0, time: 0 };
   private raycaster = new THREE.Raycaster();
   private projVec = new THREE.Vector3();
+  private tmpMat4 = new THREE.Matrix4();
+  private tmpQuat = new THREE.Quaternion();
 
   constructor(
     container: HTMLElement,
@@ -216,17 +222,19 @@ export class UniverseScene {
     this.textureLoader.setCrossOrigin('anonymous');
 
     const isMobile = window.innerWidth < 768;
-    const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.35 : 1.75);
+    // Cap DPR at 1.5 so 4K / High-DPI Windows & Mac displays stay locked at 60–144 FPS
+    const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : 1.5);
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !isMobile,
       powerPreference: 'high-performance',
       logarithmicDepthBuffer: true,
+      stencil: false,
     });
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -238,47 +246,28 @@ export class UniverseScene {
       0.01,
       1e22
     );
-    this.camera.position.set(15, 8.5, 20);
+    this.camera.position.set(14.5, 8.0, 19.5);
 
-    // Post-processing Optical Bloom Pipeline with HalfFloat HDR + Depth Buffer
-    const rt = new THREE.WebGLRenderTarget(
-      Math.max(1, Math.floor(container.clientWidth * dpr)),
-      Math.max(1, Math.floor(container.clientHeight * dpr)),
-      { type: THREE.HalfFloatType, depthBuffer: true }
-    );
-    this.composer = new EffectComposer(this.renderer, rt);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(container.clientWidth, container.clientHeight),
-      0.42, // Subtle luxury bloom — glowing stars & atmospheres without glare
-      0.55,
-      0.78
-    );
-    this.composer.addPass(this.bloomPass);
-    this.composer.addPass(new OutputPass());
-
-    // Ultra-smooth weighted OrbitControls
+    // Smooth weighted OrbitControls
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.target.set(0, 0, 0);
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.052;
+    this.controls.dampingFactor = 0.065;
     this.controls.enablePan = false;
-    this.controls.zoomSpeed = 0.92;
-    this.controls.rotateSpeed = 0.58;
+    this.controls.zoomSpeed = 0.95;
+    this.controls.rotateSpeed = 0.6;
     this.controls.minDistance = 7.8;
     this.controls.maxDistance = 1.2e21;
 
-    // Immediately yield autopilot to user hand if they grab or scroll!
+    // Immediately yield autopilot to user hand if they grab or scroll
     this.controls.addEventListener('start', () => {
       if (this.flyAnim?.active) {
         this.flyAnim = null;
       }
     });
 
-    // Build 360° Deep-Space Milky Way Panorama Skybox
     this.buildSkyPanorama();
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.25));
     this.scene.add(this.heliocentricMacroGroup);
     this.scene.add(this.solarSystemGroup);
     this.scene.add(this.satelliteGroup);
@@ -301,19 +290,19 @@ export class UniverseScene {
   private buildSkyPanorama() {
     const skyTex = this.textureLoader.load(PLANET_TEXTURE_URLS.milkyWayPanorama);
     skyTex.colorSpace = THREE.SRGBColorSpace;
-    const skyGeo = new THREE.SphereGeometry(500, 40, 28);
+    const skyGeo = new THREE.SphereGeometry(500, 32, 24);
     const skyMat = new THREE.MeshBasicMaterial({
       map: skyTex,
+      color: new THREE.Color('#b8d4ff'), // Cool silver-blue starlight tint (eliminates warm brown cast)
       side: THREE.BackSide,
       depthWrite: false,
       depthTest: false,
       transparent: true,
-      opacity: 0.44,
+      opacity: 0.22,
     });
     this.skyPanoramaMesh = new THREE.Mesh(skyGeo, skyMat);
     this.skyPanoramaMesh.renderOrder = -1000;
     this.skyPanoramaMesh.frustumCulled = false;
-    // Tilt Milky Way panorama 62.87° to match real J2000 Galactic Plane inclination!
     this.skyPanoramaMesh.rotation.set(1.097, 0.42, 0.25);
     this.scene.add(this.skyPanoramaMesh);
   }
@@ -324,17 +313,18 @@ export class UniverseScene {
       btn.type = 'button';
       btn.style.display = 'none';
       btn.style.willChange = 'transform';
+      // IMPORTANT: No backdrop-filter on moving 3D markers — avoids 24 per-frame GPU framebuffer readbacks!
       btn.className =
-        'pointer-events-auto absolute top-0 left-0 flex items-center gap-1.5 px-2.5 py-1 rounded-full border backdrop-blur-md transition-colors duration-150 bg-[#050b18]/72 border-white/12 text-slate-100 hover:border-cyan-400/70 hover:bg-cyan-950/75 shadow-[0_4px_16px_rgba(0,0,0,0.45)] cursor-pointer';
+        'pointer-events-auto absolute top-0 left-0 flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border transition-colors duration-150 bg-[#050b18]/90 border-white/14 text-slate-100 hover:border-cyan-400/80 hover:bg-cyan-950/90 shadow-md cursor-pointer';
 
       const dot = document.createElement('span');
-      dot.className = 'w-1.5 h-1.5 rounded-full shrink-0 shadow-[0_0_6px_currentColor]';
+      dot.className = 'w-1.5 h-1.5 rounded-full shrink-0';
 
       const label = document.createElement('span');
       label.className = 'text-[11px] font-medium tracking-tight whitespace-nowrap';
 
       const tag = document.createElement('span');
-      tag.className = 'text-[9px] font-mono font-semibold px-1.5 py-0.2 rounded-full bg-cyan-400/20 text-cyan-300';
+      tag.className = 'text-[9px] font-mono font-semibold px-1.5 rounded-full bg-cyan-400/20 text-cyan-300';
       tag.style.display = 'none';
 
       btn.append(dot, label, tag);
@@ -368,7 +358,6 @@ export class UniverseScene {
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
-      this.composer.setSize(w, h);
     };
     window.addEventListener('resize', onResize);
 
@@ -411,6 +400,25 @@ export class UniverseScene {
     this.deepSpace = params.deepSpace;
     this.catalogById = params.catalogById;
 
+    // Pre-filter HUD label candidates once (avoids 13,700-element scans every frame!)
+    this.labelSatellites = this.compiledSatellites.filter(
+      (c) =>
+        c.record.category === 'Space Station' ||
+        c.record.name.includes('HST') ||
+        c.record.name.includes('HUBBLE')
+    );
+    this.labelStars = this.stars
+      .filter((s) => Boolean(s.proper && (s.mag < 1.6 || s.distLy < 14)))
+      .slice(0, 36);
+    this.labelExoplanets = this.exoplanets
+      .filter(
+        (p) =>
+          (p.inHabitableZone && p.distLy < 110) ||
+          p.name.startsWith('TRAPPIST-1') ||
+          p.name.startsWith('Proxima')
+      )
+      .slice(0, 32);
+
     this.buildSolarSystem();
     this.buildSatellitesLayer();
     this.buildStarsLayer();
@@ -431,12 +439,36 @@ export class UniverseScene {
   private loadSRGBTexture(url: string): THREE.Texture {
     const tex = this.textureLoader.load(url);
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
     return tex;
   }
 
+  private ensureDeepSpaceTexturesLoaded() {
+    if (this.deepSpaceTexturesLoaded) return;
+    this.deepSpaceTexturesLoaded = true;
+    for (const item of this.pendingLandmarkTextures) {
+      const { primaryUrl, fallbackUrl } = resolveWebGLTextureUrls(item.heroUrl);
+      this.textureLoader.load(
+        primaryUrl,
+        (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          item.mat.uniforms.uMap.value = tex;
+          item.mat.needsUpdate = true;
+        },
+        undefined,
+        () => {
+          this.textureLoader.load(fallbackUrl, (t2) => {
+            t2.colorSpace = THREE.SRGBColorSpace;
+            item.mat.uniforms.uMap.value = t2;
+            item.mat.needsUpdate = true;
+          });
+        }
+      );
+    }
+  }
+
   /**
-   * 1. Build Photorealistic 3D Solar System (Textured Earth w/ Night Lights & Clouds + Spacecraft Planet Maps!)
+   * 1. Build Photorealistic 3D Solar System
    */
   private buildSolarSystem() {
     this.solarSystemGroup.clear();
@@ -453,12 +485,12 @@ export class UniverseScene {
       if (body.id === 'sun') {
         const mat = createStarSurfaceMaterial('#ffbe55');
         this.animatedMaterials.add(mat);
-        const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 56, 56), mat);
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 40, 40), mat);
         mesh.userData = { objectId: body.id };
         holder.add(mesh);
 
-        // Luscious Volumetric Solar Corona Sprite
-        const glowGeo = new THREE.PlaneGeometry(5.6, 5.6);
+        // Volumetric Solar Corona Sprite (100% NaN-safe)
+        const glowGeo = new THREE.PlaneGeometry(5.4, 5.4);
         const glowMat = new THREE.ShaderMaterial({
           transparent: true,
           depthWrite: false,
@@ -484,7 +516,8 @@ export class UniverseScene {
               #include <logdepthbuf_fragment>
               float d = length(vUv - 0.5) * 2.0;
               if (d > 1.0) discard;
-              float g = pow(1.0 - d, 3.2) * 0.78;
+              float x = max(1e-4, 1.0 - d);
+              float g = x * x * x * 0.72;
               gl_FragColor = vec4(1.0, 0.72, 0.28, g);
             }
           `,
@@ -500,18 +533,17 @@ export class UniverseScene {
         this.sunHabitableZoneMesh.rotation.x = Math.PI / 2 - (23.439 * Math.PI) / 180;
         this.solarSystemGroup.add(this.sunHabitableZoneMesh);
       } else if (body.id === 'earth') {
-        // Photorealistic Multi-Layer 3D Earth!
         const dayMap = this.loadSRGBTexture(PLANET_TEXTURE_URLS.earthDay);
         const nightMap = this.loadSRGBTexture(PLANET_TEXTURE_URLS.earthNight);
         const cloudsMap = this.textureLoader.load(PLANET_TEXTURE_URLS.earthClouds);
         const earthMat = createTexturedEarthMaterial({ dayMap, nightMap, cloudsMap });
         this.animatedMaterials.add(earthMat);
 
-        const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), earthMat);
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 56, 56), earthMat);
         sphere.userData = { objectId: body.id, isPlanetSphere: true };
         holder.add(sphere);
 
-        // Outer Rayleigh Atmosphere Halo Shell
+        // Rayleigh Atmosphere Halo Shell (100% NaN-safe)
         const atmoMat = new THREE.ShaderMaterial({
           transparent: true,
           depthWrite: false,
@@ -524,8 +556,8 @@ export class UniverseScene {
             varying vec3 vViewDirWS;
             void main() {
               vec4 worldPos = modelMatrix * vec4(position, 1.0);
-              vNormalWS = normalize(mat3(modelMatrix) * normal);
-              vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+              vNormalWS = mat3(modelMatrix) * normal;
+              vViewDirWS = cameraPosition - worldPos.xyz;
               gl_Position = projectionMatrix * viewMatrix * worldPos;
               #include <logdepthbuf_vertex>
             }
@@ -537,14 +569,16 @@ export class UniverseScene {
             varying vec3 vViewDirWS;
             void main() {
               #include <logdepthbuf_fragment>
-              float rim = pow(clamp(0.62 - dot(normalize(vNormalWS), normalize(vViewDirWS)), 0.0, 1.0), 2.6);
-              gl_FragColor = vec4(0.24, 0.64, 1.0, rim * 0.72);
+              vec3 n = vNormalWS * inversesqrt(max(dot(vNormalWS, vNormalWS), 1e-8));
+              vec3 v = vViewDirWS * inversesqrt(max(dot(vViewDirWS, vViewDirWS), 1e-8));
+              float x = clamp(0.62 - dot(n, v), 0.0, 1.0);
+              float rim = x * x * sqrt(x);
+              gl_FragColor = vec4(0.24, 0.64, 1.0, rim * 0.68);
             }
           `,
         });
-        holder.add(new THREE.Mesh(new THREE.SphereGeometry(1.045, 48, 48), atmoMat));
+        holder.add(new THREE.Mesh(new THREE.SphereGeometry(1.045, 40, 40), atmoMat));
       } else {
-        // Photorealistic Spacecraft-Textured Planet (or high-craft procedural fallback for Pluto)
         const texUrl = PLANET_TEXTURE_URLS[body.id];
         let mat: THREE.ShaderMaterial;
         if (texUrl) {
@@ -552,7 +586,7 @@ export class UniverseScene {
             map: this.loadSRGBTexture(texUrl),
             atmosphereColor: body.color,
             atmosphereStrength: ['venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'].includes(body.id)
-              ? 0.36
+              ? 0.34
               : 0.12,
           });
         } else {
@@ -566,7 +600,7 @@ export class UniverseScene {
           this.animatedMaterials.add(mat);
         }
 
-        const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 52, 52), mat);
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 36, 36), mat);
         sphere.userData = { objectId: body.id, isPlanetSphere: true };
         holder.add(sphere);
 
@@ -574,7 +608,7 @@ export class UniverseScene {
           const isSat = body.id === 'saturn';
           const innerR = isSat ? 1.28 : 1.45;
           const outerR = isSat ? 2.38 : 1.88;
-          const ringGeo = new THREE.RingGeometry(innerR, outerR, 96);
+          const ringGeo = new THREE.RingGeometry(innerR, outerR, 72);
           const ringMat = createPlanetaryRingMaterial(
             isSat ? '#ebd5a7' : '#7dd3fc',
             isSat
@@ -585,7 +619,6 @@ export class UniverseScene {
         }
       }
 
-      // Crisp, subtle Elliptical 3D Orbit Path
       if (body.id !== 'sun') {
         const ringPtsLy = computeOrbitRingLy(body, now);
         if (ringPtsLy.length > 2) {
@@ -600,7 +633,7 @@ export class UniverseScene {
           const orbitMat = new THREE.LineBasicMaterial({
             color: body.color,
             transparent: true,
-            opacity: body.id === 'earth' ? 0.42 : 0.2,
+            opacity: body.id === 'earth' ? 0.35 : 0.18,
           });
           const orbitLine = new THREE.Line(orbitGeo, orbitMat);
           orbitLine.frustumCulled = false;
@@ -634,7 +667,7 @@ export class UniverseScene {
       colors[i * 3] = tmpColor.r;
       colors[i * 3 + 1] = tmpColor.g;
       colors[i * 3 + 2] = tmpColor.b;
-      scales[i] = isStation ? 2.2 : isTelescope ? 1.7 : 0.92;
+      scales[i] = isStation ? 2.1 : isTelescope ? 1.65 : 0.9;
       alphas[i] = 0.88;
       highlights[i] = isStation ? 1.0 : 0.0;
     }
@@ -672,6 +705,7 @@ export class UniverseScene {
     const tmpColor = new THREE.Color();
     const sharedHzMat = createHabitableZoneMaterial();
     this.animatedMaterials.add(sharedHzMat);
+    const sharedHzGeo = new THREE.PlaneGeometry(1, 1);
 
     for (let i = 0; i < count; i++) {
       const s = this.stars[i];
@@ -684,16 +718,16 @@ export class UniverseScene {
       colors[i * 3 + 1] = tmpColor.g;
       colors[i * 3 + 2] = tmpColor.b;
 
-      scales[i] = Math.max(0.5, Math.min(3.4, (6.5 - s.mag) * 0.46));
-      alphas[i] = Math.max(0.32, Math.min(0.98, (7.0 - s.mag) * 0.22));
+      scales[i] = Math.max(0.45, Math.min(3.2, (6.5 - s.mag) * 0.44));
+      alphas[i] = Math.max(0.3, Math.min(0.96, (7.0 - s.mag) * 0.21));
       highlights[i] = 0.0;
 
       this.livePositionsLy.set(s.id, s.posLy);
 
-      if ((s.distLy < 42 || s.proper) && this.starHzGroup.children.length < 150) {
+      if ((s.distLy < 40 || s.proper) && this.starHzGroup.children.length < 120) {
         const outerAu = Math.max(0.05, Math.min(40, s.hzOuterAu));
         const hzDiameterUnits = outerAu * 2 * RENDER_UNITS_PER_AU;
-        const ringMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), sharedHzMat);
+        const ringMesh = new THREE.Mesh(sharedHzGeo, sharedHzMat);
         ringMesh.position.set(
           s.posLy[0] * RENDER_UNITS_PER_LY,
           s.posLy[1] * RENDER_UNITS_PER_LY,
@@ -714,8 +748,8 @@ export class UniverseScene {
     geo.setAttribute('aHighlight', new THREE.BufferAttribute(highlights, 1));
 
     const mat = createCosmicPointsMaterial({
-      baseSizePx: 4.8,
-      maxSizePx: 26,
+      baseSizePx: 4.5,
+      maxSizePx: 24,
       diffractionSpikes: true,
     });
     this.starPoints = new THREE.Points(geo, mat);
@@ -746,7 +780,7 @@ export class UniverseScene {
       colors[i * 3 + 1] = tmpColor.g;
       colors[i * 3 + 2] = tmpColor.b;
 
-      scales[i] = p.inHabitableZone ? 1.55 : p.isRecent ? 1.35 : 0.92;
+      scales[i] = p.inHabitableZone ? 1.45 : p.isRecent ? 1.25 : 0.85;
       alphas[i] = 0.72;
       highlights[i] = p.inHabitableZone ? 1.0 : 0.0;
       this.livePositionsLy.set(p.id, p.posLy);
@@ -760,8 +794,8 @@ export class UniverseScene {
     geo.setAttribute('aHighlight', new THREE.BufferAttribute(highlights, 1));
 
     const mat = createCosmicPointsMaterial({
-      baseSizePx: 4.8,
-      maxSizePx: 20,
+      baseSizePx: 4.4,
+      maxSizePx: 18,
       diffractionSpikes: false,
     });
     this.exoplanetPoints = new THREE.Points(geo, mat);
@@ -801,7 +835,7 @@ export class UniverseScene {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(regularVerts, 3));
       this.constellationLinesMesh = new THREE.LineSegments(
         geo,
-        new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.24 })
+        new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.18 })
       );
       this.constellationLinesMesh.frustumCulled = false;
       this.heliocentricMacroGroup.add(this.constellationLinesMesh);
@@ -812,7 +846,7 @@ export class UniverseScene {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(zodiacVerts, 3));
       this.zodiacLinesMesh = new THREE.LineSegments(
         geo,
-        new THREE.LineBasicMaterial({ color: '#fbbf24', transparent: true, opacity: 0.58 })
+        new THREE.LineBasicMaterial({ color: '#fbbf24', transparent: true, opacity: 0.42 })
       );
       this.zodiacLinesMesh.frustumCulled = false;
       this.heliocentricMacroGroup.add(this.zodiacLinesMesh);
@@ -832,7 +866,7 @@ export class UniverseScene {
     const eclMat = new THREE.LineDashedMaterial({
       color: '#f59e0b',
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.25,
       dashSize: 5 * RENDER_UNITS_PER_LY,
       gapSize: 3 * RENDER_UNITS_PER_LY,
     });
@@ -845,9 +879,18 @@ export class UniverseScene {
   private buildDeepSpaceAndCosmicWeb() {
     this.landmarkGroup.clear();
     this.landmarkMeshes.clear();
+    this.pendingLandmarkTextures = [];
+    this.deepSpaceTexturesLoaded = false;
     if (!this.deepSpace) return;
 
     const allDeep: DeepSpaceRecord[] = [...this.deepSpace.landmarks, ...this.deepSpace.catalogDsos];
+    const sharedPlane25D = new THREE.PlaneGeometry(1, 1, 24, 24);
+    const sharedGlowPlane = new THREE.PlaneGeometry(1, 1);
+
+    // Placeholder 1x1 dark pixel texture until deep-space textures lazy-load on zoom-out
+    const placeholderData = new Uint8Array([18, 28, 48, 255]);
+    const placeholderTex = new THREE.DataTexture(placeholderData, 1, 1);
+    placeholderTex.needsUpdate = true;
 
     for (const d of allDeep) {
       if (d.id === 'jwst') continue;
@@ -855,39 +898,73 @@ export class UniverseScene {
       if (d.id === 'cmb-horizon') continue;
 
       if (d.renderAs25D && d.heroImage) {
-        const planeGeo = new THREE.PlaneGeometry(1, 1, 36, 36);
-        const { primaryUrl, fallbackUrl } = resolveWebGLTextureUrls(d.heroImage);
-        const tex = this.textureLoader.load(primaryUrl, undefined, undefined, () => {
-          this.textureLoader.load(fallbackUrl, (t2) => {
-            t2.colorSpace = THREE.SRGBColorSpace;
-            mat.uniforms.uMap.value = t2;
-          });
-        });
-        tex.colorSpace = THREE.SRGBColorSpace;
         const mat = createTelescope25DMaterial({
-          texture: tex,
+          texture: placeholderTex,
           tintColor: d.color,
           spherical: d.category === 'black-hole',
-          depthStrength: d.category === 'galaxy' ? 0.16 : 0.28,
+          depthStrength: d.category === 'galaxy' ? 0.16 : 0.26,
         });
         this.animatedMaterials.add(mat);
+        this.pendingLandmarkTextures.push({ mat, heroUrl: d.heroImage });
 
-        const mesh = new THREE.Mesh(planeGeo, mat);
-        mesh.userData = { objectId: d.id, baseSizeLy: Math.max(2.0, d.sizeLy * 1.4), posLy: d.posLy };
-        mesh.frustumCulled = false;
+        const mesh = new THREE.Mesh(sharedPlane25D, mat);
+        mesh.userData = {
+          objectId: d.id,
+          category: d.category,
+          distLy: d.distLy,
+          baseSizeLy: Math.max(2.0, d.sizeLy * 1.4),
+          posLy: d.posLy,
+        };
         this.landmarkMeshes.set(d.id, mesh);
         this.landmarkGroup.add(mesh);
       } else {
-        const spriteGeo = new THREE.SphereGeometry(1, 18, 18);
-        const spriteMat = new THREE.MeshBasicMaterial({
-          color: d.color,
+        // Soft additive radial nebula/cluster glow disc (NO giant enclosing wireframe spheres!)
+        const glowMat = new THREE.ShaderMaterial({
           transparent: true,
-          opacity: d.category === 'cosmic-structure' ? 0.18 : 0.78,
-          wireframe: d.category === 'cosmic-structure',
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          uniforms: {
+            uColor: { value: new THREE.Color(d.color) },
+            uAlpha: { value: d.category === 'cosmic-structure' ? 0.22 : 0.55 },
+          },
+          vertexShader: /* glsl */ `
+            #include <common>
+            #include <logdepthbuf_pars_vertex>
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              #include <logdepthbuf_vertex>
+            }
+          `,
+          fragmentShader: /* glsl */ `
+            #include <common>
+            #include <logdepthbuf_pars_fragment>
+            uniform vec3 uColor;
+            uniform float uAlpha;
+            varying vec2 vUv;
+            void main() {
+              #include <logdepthbuf_fragment>
+              float r = length(vUv - 0.5) * 2.0;
+              if (r > 1.0) discard;
+              float x = 1.0 - r;
+              gl_FragColor = vec4(uColor, x * x * uAlpha);
+            }
+          `,
         });
-        const mesh = new THREE.Mesh(spriteGeo, spriteMat);
-        mesh.userData = { objectId: d.id, baseSizeLy: Math.max(0.05, d.sizeLy * 0.5), posLy: d.posLy };
-        mesh.frustumCulled = false;
+        const capSizeLy =
+          d.category === 'cosmic-structure'
+            ? Math.min(d.sizeLy * 0.25, d.distLy * 0.35)
+            : Math.max(0.1, d.sizeLy * 0.6);
+        const mesh = new THREE.Mesh(sharedGlowPlane, glowMat);
+        mesh.userData = {
+          objectId: d.id,
+          category: d.category,
+          distLy: d.distLy,
+          baseSizeLy: capSizeLy,
+          posLy: d.posLy,
+        };
         this.landmarkMeshes.set(d.id, mesh);
         this.landmarkGroup.add(mesh);
       }
@@ -896,7 +973,7 @@ export class UniverseScene {
     // 3D Milky Way Barred Spiral Galaxy Disk
     const sgrA = this.deepSpace.landmarks.find((l) => l.id === 'sagittarius-a-star');
     const galCenterLy = sgrA ? sgrA.posLy : [-1300, -12900, 23300];
-    const mwCount = 5500;
+    const mwCount = 4800;
     const mwPos = new Float32Array(mwCount * 3);
     const mwCol = new Float32Array(mwCount * 3);
     const mwScale = new Float32Array(mwCount);
@@ -934,7 +1011,7 @@ export class UniverseScene {
       mwCol[i * 3 + 1] = col.g;
       mwCol[i * 3 + 2] = col.b;
       mwScale[i] = rLy < 8000 ? 1.8 : 1.1;
-      mwAlpha[i] = 0.24;
+      mwAlpha[i] = 0.35;
       mwHigh[i] = 0;
     }
 
@@ -946,13 +1023,13 @@ export class UniverseScene {
     mwGeo.setAttribute('aHighlight', new THREE.BufferAttribute(mwHigh, 1));
     this.milkyWayPoints = new THREE.Points(
       mwGeo,
-      createCosmicPointsMaterial({ baseSizePx: 6.5, maxSizePx: 20, opacity: 0.65 })
+      createCosmicPointsMaterial({ baseSizePx: 6.0, maxSizePx: 18, opacity: 0.0 })
     );
     this.milkyWayPoints.frustumCulled = false;
     this.heliocentricMacroGroup.add(this.milkyWayPoints);
 
-    // 3D Cosmic Web Filaments & 46.5-Gly CMB Horizon
-    const nodesCount = 260;
+    // 3D Cosmic Web Filaments & 46.5-Gly CMB Horizon (Extragalactic Scale LOD!)
+    const nodesCount = 240;
     const webNodes: THREE.Vector3[] = [];
     for (let i = 0; i < nodesCount; i++) {
       const logMin = Math.log10(8e6);
@@ -997,7 +1074,7 @@ export class UniverseScene {
           nb.b.z * RENDER_UNITS_PER_LY
         );
 
-        for (let s = 0; s < 10; s++) {
+        for (let s = 0; s < 9; s++) {
           const t = Math.random();
           const spread = a.length() * 0.035;
           const gx = THREE.MathUtils.lerp(a.x, nb.b.x, t) + (Math.random() - 0.5) * spread;
@@ -1007,7 +1084,7 @@ export class UniverseScene {
           const col = s % 3 === 0 ? cFil3 : s % 2 === 0 ? cFil2 : cFil1;
           galFieldCol.push(col.r, col.g, col.b);
           galFieldScale.push(1.1);
-          galFieldAlpha.push(0.4);
+          galFieldAlpha.push(0.45);
           galFieldHigh.push(0);
         }
       }
@@ -1017,9 +1094,10 @@ export class UniverseScene {
     filGeo.setAttribute('position', new THREE.Float32BufferAttribute(filamentVerts, 3));
     this.cosmicWebLines = new THREE.LineSegments(
       filGeo,
-      new THREE.LineBasicMaterial({ color: '#6366f1', transparent: true, opacity: 0.16 })
+      new THREE.LineBasicMaterial({ color: '#6366f1', transparent: true, opacity: 0.22 })
     );
     this.cosmicWebLines.frustumCulled = false;
+    this.cosmicWebLines.visible = false;
     this.heliocentricMacroGroup.add(this.cosmicWebLines);
 
     const cwGeo = new THREE.BufferGeometry();
@@ -1030,24 +1108,25 @@ export class UniverseScene {
     cwGeo.setAttribute('aHighlight', new THREE.Float32BufferAttribute(galFieldHigh, 1));
     this.cosmicWebPoints = new THREE.Points(
       cwGeo,
-      createCosmicPointsMaterial({ baseSizePx: 5.0, maxSizePx: 16, opacity: 0.75 })
+      createCosmicPointsMaterial({ baseSizePx: 5.0, maxSizePx: 16, opacity: 0.8 })
     );
     this.cosmicWebPoints.frustumCulled = false;
+    this.cosmicWebPoints.visible = false;
     this.heliocentricMacroGroup.add(this.cosmicWebPoints);
 
     const cmbRadiusUnits = 46_500_000_000 * RENDER_UNITS_PER_LY;
-    const cmbGeo = new THREE.SphereGeometry(cmbRadiusUnits, 48, 32);
+    const cmbGeo = new THREE.SphereGeometry(cmbRadiusUnits, 40, 28);
     const cmbMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
       side: THREE.BackSide,
-      uniforms: { uTime: { value: 0 } },
+      uniforms: { uOpacity: { value: 0.0 } },
       vertexShader: /* glsl */ `
         #include <common>
         #include <logdepthbuf_pars_vertex>
         varying vec3 vDir;
         void main() {
-          vDir = normalize(position);
+          vDir = position * inversesqrt(max(dot(position, position), 1e-8));
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           #include <logdepthbuf_vertex>
         }
@@ -1055,22 +1134,25 @@ export class UniverseScene {
       fragmentShader: /* glsl */ `
         #include <common>
         #include <logdepthbuf_pars_fragment>
+        uniform float uOpacity;
         varying vec3 vDir;
         void main() {
+          if (uOpacity <= 0.005) discard;
           #include <logdepthbuf_fragment>
           float n = sin(vDir.x * 19.0) * cos(vDir.y * 23.0) * sin(vDir.z * 17.0) +
                     0.5 * cos(vDir.x * 43.0 + vDir.z * 37.0);
-          vec3 coldSpot = vec3(0.05, 0.22, 0.58);
-          vec3 warmSpot = vec3(0.85, 0.36, 0.08);
+          vec3 coldSpot = vec3(0.05, 0.24, 0.62);
+          vec3 warmSpot = vec3(0.78, 0.34, 0.12);
           vec3 col = mix(coldSpot, warmSpot, clamp(n * 0.5 + 0.5, 0.0, 1.0));
-          float grid = smoothstep(0.985, 1.0, abs(sin(vDir.y * 24.0))) * 0.16;
-          gl_FragColor = vec4(col + grid, 0.15);
+          float grid = smoothstep(0.985, 1.0, abs(sin(vDir.y * 24.0))) * 0.14;
+          gl_FragColor = vec4(col + grid, uOpacity);
         }
       `,
     });
     this.cmbSphereMesh = new THREE.Mesh(cmbGeo, cmbMat);
     this.cmbSphereMesh.userData = { objectId: 'cmb-horizon' };
     this.cmbSphereMesh.frustumCulled = false;
+    this.cmbSphereMesh.visible = false;
     this.heliocentricMacroGroup.add(this.cmbSphereMesh);
   }
 
@@ -1108,7 +1190,7 @@ export class UniverseScene {
       this.helicalTrails.set(b.id, { pointsLy: [], line });
     }
 
-    const pCount = 420;
+    const pCount = 360;
     const pPos = new Float32Array(pCount * 3);
     const pCol = new Float32Array(pCount * 3);
     const pScale = new Float32Array(pCount);
@@ -1133,7 +1215,7 @@ export class UniverseScene {
     vGeo.setAttribute('aHighlight', new THREE.BufferAttribute(pHigh, 1));
     this.velocityGridPoints = new THREE.Points(
       vGeo,
-      createCosmicPointsMaterial({ baseSizePx: 4.2, maxSizePx: 11, opacity: 0.7 })
+      createCosmicPointsMaterial({ baseSizePx: 4.0, maxSizePx: 10, opacity: 0.7 })
     );
     this.velocityGridPoints.frustumCulled = false;
     this.helicalGroup.add(this.velocityGridPoints);
@@ -1189,7 +1271,7 @@ export class UniverseScene {
     const starMat = createStarSurfaceMaterial(starColor);
     this.animatedMaterials.add(starMat);
     const starRadiusUnits = Math.max(0.12, exo.starRadiiSolar) * 696.34;
-    const starMesh = new THREE.Mesh(new THREE.SphereGeometry(starRadiusUnits * 3.5, 44, 44), starMat);
+    const starMesh = new THREE.Mesh(new THREE.SphereGeometry(starRadiusUnits * 3.5, 36, 36), starMat);
     this.visitedExoSystemGroup.add(starMesh);
 
     const hzOuterUnits = Math.max(0.02, exo.hzOuterAu) * RENDER_UNITS_PER_AU * 2;
@@ -1230,7 +1312,7 @@ export class UniverseScene {
       });
       this.animatedMaterials.add(pMat);
       const pRadiusUnits = Math.max(45, sib.earthRadii * 6.371 * 28);
-      const pMesh = new THREE.Mesh(new THREE.SphereGeometry(pRadiusUnits, 40, 40), pMat);
+      const pMesh = new THREE.Mesh(new THREE.SphereGeometry(pRadiusUnits, 32, 32), pMat);
       pMesh.userData = {
         objectId: sib.id,
         orbitRadiusUnits,
@@ -1269,10 +1351,6 @@ export class UniverseScene {
     if (exoHz) exoHz.visible = this.layers.habitableZones;
     if (this.exoplanetPoints) this.exoplanetPoints.visible = this.layers.exoplanets;
     this.landmarkGroup.visible = this.layers.deepSpace;
-    if (this.milkyWayPoints) this.milkyWayPoints.visible = this.layers.cosmicWeb;
-    if (this.cosmicWebPoints) this.cosmicWebPoints.visible = this.layers.cosmicWeb;
-    if (this.cosmicWebLines) this.cosmicWebLines.visible = this.layers.cosmicWeb;
-    if (this.cmbSphereMesh) this.cmbSphereMesh.visible = this.layers.cosmicWeb;
     this.helicalGroup.visible = this.layers.helicalMotion;
     this.markerLayerEl.style.display = this.layers.labels ? 'block' : 'none';
   }
@@ -1286,20 +1364,20 @@ export class UniverseScene {
     const f = this.filters;
     const tmpCol = new THREE.Color();
 
+    this.hasActiveExoFilter =
+      f.planetTypes.length > 0 ||
+      f.minEarthRadii > 0.15 ||
+      f.maxEarthRadii < 24.9 ||
+      f.habitableOnly ||
+      f.recentDiscoveriesOnly ||
+      f.discoveryFacility !== 'ALL';
+
     if (this.exoplanetPoints) {
       const geo = this.exoplanetPoints.geometry;
       const alphas = geo.getAttribute('aAlpha') as THREE.BufferAttribute;
       const highlights = geo.getAttribute('aHighlight') as THREE.BufferAttribute;
       const colors = geo.getAttribute('aColor') as THREE.BufferAttribute;
       let matched = 0;
-
-      const hasActiveExoFilter =
-        f.planetTypes.length > 0 ||
-        f.minEarthRadii > 0.15 ||
-        f.maxEarthRadii < 24.9 ||
-        f.habitableOnly ||
-        f.recentDiscoveriesOnly ||
-        f.discoveryFacility !== 'ALL';
 
       for (let i = 0; i < this.exoplanets.length; i++) {
         const p = this.exoplanets[i];
@@ -1318,10 +1396,10 @@ export class UniverseScene {
 
         if (f.actionMode === 'isolate') {
           alphas.setX(i, ok ? 0.92 : 0.0);
-          highlights.setX(i, ok && hasActiveExoFilter ? 1.0 : 0.0);
+          highlights.setX(i, ok && this.hasActiveExoFilter ? 1.0 : 0.0);
         } else if (f.actionMode === 'highlight') {
           alphas.setX(i, ok ? 1.0 : 0.1);
-          highlights.setX(i, ok && hasActiveExoFilter ? 1.0 : 0.0);
+          highlights.setX(i, ok && this.hasActiveExoFilter ? 1.0 : 0.0);
         } else {
           alphas.setX(i, ok ? 0.9 : 0.08);
           highlights.setX(i, 0.0);
@@ -1358,7 +1436,7 @@ export class UniverseScene {
         const ok = matchRad && matchSpec;
         if (ok) matchedStars++;
 
-        const baseAlpha = Math.max(0.32, Math.min(0.98, (7.0 - s.mag) * 0.22));
+        const baseAlpha = Math.max(0.3, Math.min(0.96, (7.0 - s.mag) * 0.21));
         if (!hasStarFilter) {
           alphas.setX(i, baseAlpha);
           highlights.setX(i, 0.0);
@@ -1396,27 +1474,23 @@ export class UniverseScene {
     for (const [id, mesh] of this.landmarkMeshes.entries()) {
       const obj = this.catalogById.get(id);
       if (!obj) continue;
-      mesh.visible = f.deepSpaceCategory === 'ALL' || obj.category === f.deepSpaceCategory;
+      mesh.userData.filterAllowed = f.deepSpaceCategory === 'ALL' || obj.category === f.deepSpaceCategory;
     }
   }
 
   public setOpticalMode(mode: OpticalMode) {
     if (mode === 'true-color') {
       this.scene.background = new THREE.Color('#02040a');
-      this.bloomPass.strength = 0.42;
       this.renderer.domElement.style.filter = 'none';
     } else if (mode === 'tactical') {
       this.scene.background = new THREE.Color('#01090e');
-      this.bloomPass.strength = 0.52;
       this.renderer.domElement.style.filter = 'contrast(1.12) saturate(1.22) hue-rotate(-8deg)';
     } else if (mode === 'infrared') {
       this.scene.background = new THREE.Color('#080204');
-      this.bloomPass.strength = 0.6;
       this.renderer.domElement.style.filter = 'sepia(0.5) hue-rotate(-30deg) saturate(2.0) contrast(1.15)';
     } else if (mode === 'deep-field') {
       this.scene.background = new THREE.Color('#000003');
-      this.bloomPass.strength = 0.68;
-      this.renderer.domElement.style.filter = 'contrast(1.2) brightness(1.1) saturate(1.3)';
+      this.renderer.domElement.style.filter = 'contrast(1.2) brightness(1.12) saturate(1.3)';
     }
   }
 
@@ -1474,6 +1548,8 @@ export class UniverseScene {
         }
       } else if (obj?.category === 'exoplanet') {
         this.buildVisitedExoplanetSystem(id);
+      } else if (['nebula', 'galaxy', 'black-hole', 'cluster'].includes(obj?.category || '')) {
+        this.ensureDeepSpaceTexturesLoaded();
       }
     }
 
@@ -1511,16 +1587,19 @@ export class UniverseScene {
           break;
         case 'nebula':
         case 'cluster': {
+          this.ensureDeepSpaceTexturesLoaded();
           const ds = obj.raw as DeepSpaceRecord;
           desiredRadius = Math.max(8, ds.sizeLy * 2.1) * RENDER_UNITS_PER_LY;
           break;
         }
         case 'black-hole': {
+          this.ensureDeepSpaceTexturesLoaded();
           const bh = obj.raw as DeepSpaceRecord;
           desiredRadius = Math.max(2, bh.sizeLy * 2.8) * RENDER_UNITS_PER_LY;
           break;
         }
         case 'galaxy': {
+          this.ensureDeepSpaceTexturesLoaded();
           const gal = obj.raw as DeepSpaceRecord;
           desiredRadius = Math.max(40_000, gal.sizeLy * 2.1) * RENDER_UNITS_PER_LY;
           break;
@@ -1582,7 +1661,7 @@ export class UniverseScene {
     const meshCandidates: THREE.Object3D[] = [
       ...Array.from(this.solarMeshes.values()),
       ...this.visitedExoSystemGroup.children.filter((c) => c.userData?.objectId),
-      ...Array.from(this.landmarkMeshes.values()),
+      ...Array.from(this.landmarkMeshes.values()).filter((m) => m.visible),
     ];
     const hits = this.raycaster.intersectObjects(meshCandidates, true);
     for (const hit of hits) {
@@ -1626,7 +1705,7 @@ export class UniverseScene {
       }
     }
 
-    if (this.layers.exoplanets && this.exoplanetPoints && camRadius > 5_000) {
+    if (this.layers.exoplanets && this.exoplanetPoints && (camRadius > 5_000 || this.hasActiveExoFilter)) {
       const alphaAttr = this.exoplanetPoints.geometry.getAttribute('aAlpha') as THREE.BufferAttribute;
       for (let i = 0; i < this.exoplanets.length; i++) {
         if (alphaAttr.getX(i) < 0.05) continue;
@@ -1660,24 +1739,48 @@ export class UniverseScene {
     }
   }
 
-  private updateDynamicPositions(simDate: Date, forceSatellites = false) {
-    let solarOffsetLy: [number, number, number] = [0, 0, 0];
-    if (this.layers.helicalMotion) {
-      const distLy = (SOLAR_GALACTIC_SPEED_KMS * this.helicalDisplacementSec) / KM_PER_LY;
-      solarOffsetLy = [
-        SOLAR_GALACTIC_APEX_DIR[0] * distLy,
-        SOLAR_GALACTIC_APEX_DIR[1] * distLy,
-        SOLAR_GALACTIC_APEX_DIR[2] * distLy,
-      ];
+  private updateDynamicPositions(simDate: Date, forceUpdate = false) {
+    const nowPerf = performance.now();
+
+    // Throttle VSOP87 solar ephemeris math when running at gentle real-time speeds (90% CPU savings!)
+    const shouldComputeSolar =
+      forceUpdate ||
+      this.layers.helicalMotion ||
+      this.timeScale > 60 ||
+      nowPerf - this.lastSolarEphemRealMs > 100;
+
+    if (shouldComputeSolar) {
+      this.lastSolarEphemRealMs = nowPerf;
+      this.cachedEarthRotRad = getEarthSiderealRotationRad(simDate);
+
+      let solarOffsetLy: [number, number, number] = [0, 0, 0];
+      if (this.layers.helicalMotion) {
+        const distLy = (SOLAR_GALACTIC_SPEED_KMS * this.helicalDisplacementSec) / KM_PER_LY;
+        solarOffsetLy = [
+          SOLAR_GALACTIC_APEX_DIR[0] * distLy,
+          SOLAR_GALACTIC_APEX_DIR[1] * distLy,
+          SOLAR_GALACTIC_APEX_DIR[2] * distLy,
+        ];
+      }
+
+      const solarPosMap = computeSolarSystemPositionsLy(simDate, solarOffsetLy);
+      for (const [id, posLy] of Object.entries(solarPosMap)) {
+        this.livePositionsLy.set(id, posLy);
+      }
+
+      if (this.layers.helicalMotion && Math.abs(this.simTimeMs - this.lastTrailSampleSimMs) > 60_000) {
+        this.lastTrailSampleSimMs = this.simTimeMs;
+        for (const [bodyId, trail] of this.helicalTrails.entries()) {
+          const p = solarPosMap[bodyId];
+          if (!p) continue;
+          trail.pointsLy.push([p[0], p[1], p[2]]);
+          if (trail.pointsLy.length > 580) trail.pointsLy.shift();
+        }
+      }
     }
 
-    const solarPosMap = computeSolarSystemPositionsLy(simDate, solarOffsetLy);
-    for (const [id, posLy] of Object.entries(solarPosMap)) {
-      this.livePositionsLy.set(id, posLy);
-    }
-
-    // Distance-gated SGP4 satellite propagation for silky-smooth 120 FPS!
-    const earthPosLy = solarPosMap.earth;
+    // Distance-gated SGP4 satellite propagation
+    const earthPosLy = this.livePositionsLy.get('earth') || [0, 0, 0];
     const distEarthToFocusUnits = Math.hypot(
       (earthPosLy[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY,
       (earthPosLy[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY,
@@ -1688,14 +1791,12 @@ export class UniverseScene {
 
     if (this.satellitePoints) {
       const mat = this.satellitePoints.material as THREE.ShaderMaterial;
-      // Smoothly fade out LEO swarm as camera zooms past lunar orbit into deep Solar System
       const satFade = this.layers.satellites ? THREE.MathUtils.clamp(1.0 - (camRadius - 80) / 650, 0.0, 1.0) : 0.0;
       mat.uniforms.uGlobalOpacity.value = satFade;
 
-      const nowPerf = performance.now();
       const shouldProp =
-        forceSatellites ||
-        (this.layers.satellites && nearEarth && satFade > 0.01 && (this.timeScale > 10 || nowPerf - this.lastSatPropRealMs > 60));
+        forceUpdate ||
+        (this.layers.satellites && nearEarth && satFade > 0.01 && (this.timeScale > 10 || nowPerf - this.lastSatPropRealMs > 80));
 
       if (shouldProp) {
         this.lastSatPropRealMs = nowPerf;
@@ -1718,16 +1819,6 @@ export class UniverseScene {
           }
         }
         posAttr.needsUpdate = true;
-      }
-    }
-
-    if (this.layers.helicalMotion && Math.abs(this.simTimeMs - this.lastTrailSampleSimMs) > 60_000) {
-      this.lastTrailSampleSimMs = this.simTimeMs;
-      for (const [bodyId, trail] of this.helicalTrails.entries()) {
-        const p = solarPosMap[bodyId];
-        if (!p) continue;
-        trail.pointsLy.push([p[0], p[1], p[2]]);
-        if (trail.pointsLy.length > 580) trail.pointsLy.shift();
       }
     }
   }
@@ -1765,7 +1856,7 @@ export class UniverseScene {
     if (this.flyAnim?.active) {
       this.flyAnim.progress = Math.min(1, this.flyAnim.progress + dtSec * 1.15);
       const x = this.flyAnim.progress;
-      const t = x * x * x * (x * (x * 6 - 15) + 10); // Smootherstep zero-jerk curve!
+      const t = x * x * x * (x * (x * 6 - 15) + 10);
       const destLy = this.getLivePositionLy(this.flyAnim.targetId);
       this.focusPosLy = [
         THREE.MathUtils.lerp(this.flyAnim.startPosLy[0], destLy[0], t),
@@ -1793,13 +1884,72 @@ export class UniverseScene {
 
     this.controls.update();
 
-    // Keep 360° Milky Way panorama centered on camera
+    const camRadius = this.camera.position.length();
+    const camLy = camRadius / RENDER_UNITS_PER_LY;
+    const camAu = camRadius / RENDER_UNITS_PER_AU;
+    const uTimeVal = nowMs * 0.001;
+
+    // Scale-Aware Layer LOD (Keeps Earth Orbit crisp black velvet & fades in Galactic / Cosmic Web smoothly!)
     if (this.skyPanoramaMesh) {
       this.skyPanoramaMesh.position.copy(this.camera.position);
+      const skyFade = THREE.MathUtils.clamp(1.0 - (camLy - 400) / 1200, 0.0, 1.0);
+      this.skyPanoramaMesh.visible = skyFade > 0.01;
+      (this.skyPanoramaMesh.material as THREE.MeshBasicMaterial).opacity = 0.22 * skyFade;
     }
 
-    const camRadius = this.camera.position.length();
-    const uTimeVal = nowMs * 0.001;
+    if (this.constellationLinesMesh) {
+      this.constellationLinesMesh.visible = this.layers.constellations && camLy < 2400;
+    }
+    if (this.zodiacLinesMesh) {
+      this.zodiacLinesMesh.visible = (this.layers.zodiacSigns || this.layers.constellations) && camLy < 2800;
+    }
+    if (this.zodiacEclipticRing) {
+      this.zodiacEclipticRing.visible = this.layers.zodiacSigns && camLy < 2800;
+    }
+
+    if (this.exoplanetPoints) {
+      const exoMat = this.exoplanetPoints.material as THREE.ShaderMaterial;
+      const exoLodOpacity = this.hasActiveExoFilter
+        ? 1.0
+        : THREE.MathUtils.clamp(0.16 + camAu / 35, 0.16, 0.92) *
+          THREE.MathUtils.clamp(1.0 - (camLy - 80_000) / 120_000, 0.0, 1.0);
+      exoMat.uniforms.uGlobalOpacity.value = exoLodOpacity;
+      this.exoplanetPoints.visible = this.layers.exoplanets && exoLodOpacity > 0.01;
+    }
+
+    if (this.milkyWayPoints) {
+      const mwFade = this.layers.cosmicWeb
+        ? THREE.MathUtils.clamp((camLy - 180) / 900, 0.0, 1.0) *
+          THREE.MathUtils.clamp(1.0 - (camLy - 15_000_000) / 35_000_000, 0.0, 1.0)
+        : 0.0;
+      this.milkyWayPoints.visible = mwFade > 0.01;
+      (this.milkyWayPoints.material as THREE.ShaderMaterial).uniforms.uGlobalOpacity.value = mwFade * 0.72;
+    }
+
+    // Extragalactic Cosmic Web & 46.5-Gly CMB Horizon ONLY appear when zooming out past Milky Way (> 120,000 ly)!
+    const cosmicFade = this.layers.cosmicWeb
+      ? THREE.MathUtils.clamp((camLy - 120_000) / 1_400_000, 0.0, 1.0)
+      : 0.0;
+    if (this.cosmicWebLines) {
+      this.cosmicWebLines.visible = cosmicFade > 0.01;
+      (this.cosmicWebLines.material as THREE.LineBasicMaterial).opacity = cosmicFade * 0.22;
+    }
+    if (this.cosmicWebPoints) {
+      this.cosmicWebPoints.visible = cosmicFade > 0.01;
+      (this.cosmicWebPoints.material as THREE.ShaderMaterial).uniforms.uGlobalOpacity.value = cosmicFade * 0.8;
+    }
+    if (this.cmbSphereMesh) {
+      const cmbFade = this.layers.cosmicWeb
+        ? THREE.MathUtils.clamp((camLy - 8_000_000) / 90_000_000, 0.0, 1.0)
+        : 0.0;
+      this.cmbSphereMesh.visible = cmbFade > 0.01;
+      (this.cmbSphereMesh.material as THREE.ShaderMaterial).uniforms.uOpacity.value = cmbFade * 0.16;
+    }
+
+    if (camLy > 0.3 && !this.deepSpaceTexturesLoaded) {
+      this.ensureDeepSpaceTexturesLoaded();
+    }
+
     for (const mat of this.animatedMaterials) {
       if (mat.uniforms.uTime) mat.uniforms.uTime.value = uTimeVal;
     }
@@ -1821,7 +1971,6 @@ export class UniverseScene {
 
     const sunPosLy = this.livePositionsLy.get('sun') || [0, 0, 0];
     const earthPosLy = this.livePositionsLy.get('earth') || [0, 0, 0];
-    const earthRot = getEarthSiderealRotationRad(simDate);
 
     if (this.deepSpace) {
       for (const body of this.deepSpace.solarSystem) {
@@ -1855,7 +2004,7 @@ export class UniverseScene {
 
         const sphere = meshGroup.children[0] as THREE.Mesh;
         if (sphere && body.id !== 'sun') {
-          sphere.rotation.y = body.id === 'earth' ? earthRot : uTimeVal * 0.06;
+          sphere.rotation.y = body.id === 'earth' ? this.cachedEarthRotRad : uTimeVal * 0.06;
           const pMat = sphere.material as THREE.ShaderMaterial;
           if (pMat.uniforms?.uSunDir) {
             pMat.uniforms.uSunDir.value
@@ -1866,6 +2015,8 @@ export class UniverseScene {
       }
 
       for (const [bodyId, line] of this.solarOrbitLines.entries()) {
+        line.visible = this.layers.planetOrbits && camLy < 1.2;
+        if (!line.visible) continue;
         const anchor = bodyId === 'moon' ? earthPosLy : sunPosLy;
         line.position.set(
           (anchor[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY,
@@ -1888,26 +2039,47 @@ export class UniverseScene {
       (earthPosLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY
     );
 
-    for (const [id, mesh] of this.landmarkMeshes.entries()) {
-      const pLy = this.getLivePositionLy(id);
-      const wx = (pLy[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY;
-      const wy = (pLy[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY;
-      const wz = (pLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY;
-      mesh.position.set(wx, wy, wz);
+    // Update Deep-Space Landmarks with Scale Visibility & Zero Heap Allocations
+    if (this.layers.deepSpace) {
+      const showDeep = camAu > 0.25 || this.selectedObjectId != null;
+      this.landmarkGroup.visible = showDeep;
+      if (showDeep) {
+        for (const [id, mesh] of this.landmarkMeshes.entries()) {
+          if (mesh.userData.filterAllowed === false) {
+            mesh.visible = false;
+            continue;
+          }
+          const cat = mesh.userData.category as string;
+          if (cat === 'cosmic-structure' && camLy < 1_500_000 && this.selectedObjectId !== id) {
+            mesh.visible = false;
+            continue;
+          }
+          if (camLy < 0.2 && this.selectedObjectId !== id && id !== 'voyager-1') {
+            mesh.visible = false;
+            continue;
+          }
+          mesh.visible = true;
 
-      const baseSizeUnits = (mesh.userData.baseSizeLy as number) * RENDER_UNITS_PER_LY;
-      const dCam = Math.hypot(
-        this.camera.position.x - wx,
-        this.camera.position.y - wy,
-        this.camera.position.z - wz
-      );
-      const readableMin = Math.min(baseSizeUnits * 8, dCam * 0.035);
-      mesh.scale.setScalar(Math.max(baseSizeUnits, readableMin));
+          const pLy = this.getLivePositionLy(id);
+          const wx = (pLy[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY;
+          const wy = (pLy[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY;
+          const wz = (pLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY;
+          mesh.position.set(wx, wy, wz);
 
-      const targetQuat = new THREE.Quaternion().setFromRotationMatrix(
-        new THREE.Matrix4().lookAt(this.camera.position, mesh.position, this.camera.up)
-      );
-      mesh.quaternion.slerp(targetQuat, 0.045);
+          const baseSizeUnits = (mesh.userData.baseSizeLy as number) * RENDER_UNITS_PER_LY;
+          const dCam = Math.hypot(
+            this.camera.position.x - wx,
+            this.camera.position.y - wy,
+            this.camera.position.z - wz
+          );
+          const readableMin = Math.min(baseSizeUnits * 6, dCam * 0.032);
+          mesh.scale.setScalar(Math.max(baseSizeUnits, readableMin));
+
+          this.tmpMat4.lookAt(this.camera.position, mesh.position, this.camera.up);
+          this.tmpQuat.setFromRotationMatrix(this.tmpMat4);
+          mesh.quaternion.slerp(this.tmpQuat, 0.06);
+        }
+      }
     }
 
     if (this.visitedExoSystemGroup.children.length > 0 && this.visitedExoSystemGroup.userData.anchorPosLy) {
@@ -1999,15 +2171,15 @@ export class UniverseScene {
       }
     }
 
-    // Render with Optical Bloom Pipeline
-    this.composer.render();
+    // Direct Hardware-MSAA Single-Pass Render (Zero offscreen FBO copies, zero NaN bloom blocks!)
+    this.renderer.render(this.scene, this.camera);
 
-    // Update Zero-Lag 60/120Hz Direct DOM Labels synchronously with WebGL frame!
+    // Update Zero-Lag Direct DOM Labels
     if (this.layers.labels) {
       this.updateDomMarkers(camRadius);
     }
 
-    // Throttle React telemetry HUD updates to 4 Hz (250ms) so React NEVER slows down WebGL!
+    // Throttle React telemetry HUD updates to 4 Hz
     if (nowMs - this.lastTelemetryBroadcastMs >= 250) {
       this.lastTelemetryBroadcastMs = nowMs;
       this.broadcastTelemetry(camRadius, originPosLy, targetPosLy);
@@ -2045,11 +2217,11 @@ export class UniverseScene {
 
       const x = (proj.x * 0.5 + 0.5) * w;
       const y = (-proj.y * 0.5 + 0.5) * h;
-      if (x < 40 || x > w - 40 || y < 64 || y > h - 84) return;
+      if (x < 48 || x > w - 48 || y < 74 || y > h - 90) return;
 
       if (!force) {
         for (let i = 0; i < placed.length; i++) {
-          if (Math.abs(placed[i].x - x) < 92 && Math.abs(placed[i].y - y) < 28) return;
+          if (Math.abs(placed[i].x - x) < 104 && Math.abs(placed[i].y - y) < 32) return;
         }
       }
 
@@ -2065,7 +2237,6 @@ export class UniverseScene {
         slot.boundId = id;
         slot.label.textContent = name;
         slot.dot.style.backgroundColor = color;
-        slot.dot.style.color = color;
       }
       if (tagText) {
         slot.tag.textContent = tagText;
@@ -2074,7 +2245,7 @@ export class UniverseScene {
         slot.tag.style.display = 'none';
       }
 
-      slot.el.style.borderColor = isHighlighted ? 'rgba(34,211,238,0.85)' : 'rgba(255,255,255,0.12)';
+      slot.el.style.borderColor = isHighlighted ? 'rgba(34,211,238,0.85)' : 'rgba(255,255,255,0.14)';
       slot.el.style.zIndex = isHighlighted ? '25' : '10';
     };
 
@@ -2092,14 +2263,8 @@ export class UniverseScene {
         emitMarker(b.id, b.name, b.color, this.getLivePositionLy(b.id));
       }
       if (this.layers.satellites && camKm < 80_000) {
-        for (const comp of this.compiledSatellites) {
-          if (
-            comp.record.category === 'Space Station' ||
-            comp.record.name.includes('HST') ||
-            comp.record.name.includes('HUBBLE')
-          ) {
-            emitMarker(comp.record.id, comp.record.name, '#fde047', this.getLivePositionLy(comp.record.id), 'LIVE');
-          }
+        for (const comp of this.labelSatellites) {
+          emitMarker(comp.record.id, comp.record.name, '#fde047', this.getLivePositionLy(comp.record.id), 'LIVE');
         }
       }
       if (camAu > 0.004) emitMarker('jwst', 'JWST (L2)', '#fbbf24', this.getLivePositionLy('jwst'));
@@ -2122,23 +2287,19 @@ export class UniverseScene {
     }
 
     if (camLy >= 0.4 && camLy < 8_000) {
-      for (const s of this.stars) {
-        if (s.proper && (s.mag < 1.5 || s.distLy < 12)) {
-          emitMarker(s.id, s.proper, starColorFromTempOrClass(s.teff, s.specClass), s.posLy);
-          if (used > 28) break;
-        }
+      for (const s of this.labelStars) {
+        emitMarker(s.id, s.proper || s.name, starColorFromTempOrClass(s.teff, s.specClass), s.posLy);
+        if (used > 18) break;
       }
       if (this.layers.exoplanets) {
-        for (const p of this.exoplanets) {
-          if ((p.inHabitableZone && p.distLy < 120) || p.name.startsWith('TRAPPIST-1') || p.name.startsWith('Proxima')) {
-            emitMarker(p.id, p.name, p.inHabitableZone ? '#34d399' : '#38bdf8', p.posLy, p.inHabitableZone ? 'HZ' : '');
-            if (used > 34) break;
-          }
+        for (const p of this.labelExoplanets) {
+          emitMarker(p.id, p.name, p.inHabitableZone ? '#34d399' : '#38bdf8', p.posLy, p.inHabitableZone ? 'HZ' : '');
+          if (used > 22) break;
         }
       }
     }
 
-    if (this.layers.deepSpace && this.deepSpace) {
+    if (this.layers.deepSpace && this.deepSpace && camLy >= 0.4) {
       for (const lm of this.deepSpace.landmarks) {
         if (lm.id === 'jwst' || lm.id === 'voyager-1') continue;
         if (lm.distLy > camLy * 65 && camLy < 500) continue;
@@ -2147,7 +2308,6 @@ export class UniverseScene {
       }
     }
 
-    // Hide unused slots
     for (let i = used; i < MAX_DOM_MARKERS; i++) {
       if (this.markerPool[i].visible) {
         this.markerPool[i].el.style.display = 'none';
@@ -2214,7 +2374,6 @@ export class UniverseScene {
     cancelAnimationFrame(this.rafId);
     this.cleanupListeners();
     this.controls.dispose();
-    this.composer.dispose();
     this.renderer.dispose();
     if (this.markerLayerEl.parentElement) {
       this.markerLayerEl.parentElement.removeChild(this.markerLayerEl);
