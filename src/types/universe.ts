@@ -178,6 +178,9 @@ export interface UnifiedCelestialObject {
   discFacility?: string | null;
   isRecent?: boolean;
   color: string;
+  raDeg?: number | null;
+  decDeg?: number | null;
+  wikiTitle?: string | null;
   nasaQuery: string;
   fallbackQuery?: string;
   heroImage?: string | null;

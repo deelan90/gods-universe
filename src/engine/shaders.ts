@@ -534,3 +534,208 @@ export function createCosmicPointsMaterial(params: {
     `,
   });
 }
+
+
+/**
+ * Photorealistic 3D Earth Shader:
+ * Blends NASA Blue Marble Day Map + Night-Side City Lights + Drifting Cloud Deck + Specular Glint + Rayleigh Sky Halo!
+ */
+export function createTexturedEarthMaterial(params: {
+  dayMap: THREE.Texture;
+  nightMap: THREE.Texture;
+  cloudsMap: THREE.Texture;
+}): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uDayMap: { value: params.dayMap },
+      uNightMap: { value: params.nightMap },
+      uCloudsMap: { value: params.cloudsMap },
+      uSunDir: { value: new THREE.Vector3(1, 0.2, 0.4).normalize() },
+      uTime: { value: 0 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+
+      varying vec2 vUv;
+      varying vec3 vNormalWS;
+      varying vec3 vViewDirWS;
+
+      void main() {
+        vUv = uv;
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vNormalWS = normalize(mat3(modelMatrix) * normal);
+        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+
+      uniform sampler2D uDayMap;
+      uniform sampler2D uNightMap;
+      uniform sampler2D uCloudsMap;
+      uniform vec3 uSunDir;
+      uniform float uTime;
+
+      varying vec2 vUv;
+      varying vec3 vNormalWS;
+      varying vec3 vViewDirWS;
+
+      void main() {
+        #include <logdepthbuf_fragment>
+
+        vec3 N = normalize(vNormalWS);
+        vec3 V = normalize(vViewDirWS);
+        vec3 L = normalize(uSunDir);
+
+        float cosTheta = dot(N, L);
+        float dayFactor = smoothstep(-0.16, 0.24, cosTheta);
+        float diffuse = max(0.04, smoothstep(-0.08, 0.92, cosTheta));
+
+        vec3 dayTex = texture2D(uDayMap, vUv).rgb;
+        vec3 nightTex = texture2D(uNightMap, vUv).rgb;
+
+        // Subtle drifting cloud UVs
+        vec2 cloudUv = vec2(fract(vUv.x + uTime * 0.0018), vUv.y);
+        float cloudVal = texture2D(uCloudsMap, cloudUv).r;
+
+        // Specular sun glint over oceans (where blue dominates red/green)
+        float oceanMask = clamp((dayTex.b - max(dayTex.r, dayTex.g) * 0.85) * 4.5, 0.0, 1.0) * (1.0 - cloudVal);
+        vec3 H = normalize(L + V);
+        float spec = pow(max(0.0, dot(N, H)), 42.0) * oceanMask * max(0.0, cosTheta);
+
+        vec3 litDay = mix(dayTex, vec3(0.98, 0.99, 1.0), cloudVal * 0.78) * diffuse + vec3(0.75, 0.88, 1.0) * spec * 0.55;
+        vec3 litNight = nightTex * vec3(1.25, 0.96, 0.65) * (1.0 - cloudVal * 0.65) * 1.15 + dayTex * 0.03;
+
+        vec3 surface = mix(litNight, litDay, dayFactor);
+
+        // Warm sunset twilight band along terminator + Rayleigh blue atmospheric rim
+        float twilight = exp(-pow(cosTheta * 5.5, 2.0)) * 0.24;
+        float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.0);
+        vec3 atmoColor = mix(vec3(0.12, 0.38, 0.88), vec3(0.32, 0.72, 1.0), dayFactor);
+        vec3 twilightColor = vec3(1.0, 0.42, 0.16) * twilight * fresnel * 1.6;
+
+        gl_FragColor = vec4(surface + atmoColor * fresnel * (0.35 + 0.55 * dayFactor) + twilightColor, 1.0);
+      }
+    `,
+  });
+}
+
+/**
+ * Photorealistic Textured Solar System Planet / Moon Shader
+ */
+export function createTexturedPlanetMaterial(params: {
+  map: THREE.Texture;
+  atmosphereColor: string;
+  atmosphereStrength?: number;
+}): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: params.map },
+      uAtmoColor: { value: new THREE.Color(params.atmosphereColor) },
+      uAtmoStrength: { value: params.atmosphereStrength ?? 0.32 },
+      uSunDir: { value: new THREE.Vector3(1, 0.2, 0.4).normalize() },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+
+      varying vec2 vUv;
+      varying vec3 vNormalWS;
+      varying vec3 vViewDirWS;
+
+      void main() {
+        vUv = uv;
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vNormalWS = normalize(mat3(modelMatrix) * normal);
+        vViewDirWS = normalize(cameraPosition - worldPos.xyz);
+        gl_Position = projectionMatrix * viewMatrix * worldPos;
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+
+      uniform sampler2D uMap;
+      uniform vec3 uAtmoColor;
+      uniform float uAtmoStrength;
+      uniform vec3 uSunDir;
+
+      varying vec2 vUv;
+      varying vec3 vNormalWS;
+      varying vec3 vViewDirWS;
+
+      void main() {
+        #include <logdepthbuf_fragment>
+
+        vec3 N = normalize(vNormalWS);
+        vec3 V = normalize(vViewDirWS);
+        vec3 L = normalize(uSunDir);
+
+        float diff = smoothstep(-0.18, 0.88, dot(N, L)) * 0.93 + 0.07;
+        vec3 tex = texture2D(uMap, vUv).rgb;
+        float fresnel = pow(1.0 - max(0.0, dot(N, V)), 3.2);
+
+        gl_FragColor = vec4(tex * diff + uAtmoColor * fresnel * uAtmoStrength, 1.0);
+      }
+    `,
+  });
+}
+
+/**
+ * High-Detail Concentric Planetary Ring Shader (Cassini Division & Multi-Band Ice Optical Depth)
+ */
+export function createPlanetaryRingMaterial(colorHex: string, isSaturn: boolean): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uColor: { value: new THREE.Color(colorHex) },
+      uIsSaturn: { value: isSaturn ? 1.0 : 0.0 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec3 vPosOS;
+      void main() {
+        vPosOS = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+
+      uniform vec3 uColor;
+      uniform float uIsSaturn;
+      varying vec3 vPosOS;
+
+      void main() {
+        #include <logdepthbuf_fragment>
+        float r = length(vPosOS.xy);
+
+        if (uIsSaturn > 0.5) {
+          float t = clamp((r - 1.28) / (2.38 - 1.28), 0.0, 1.0);
+          // Cassini division gap around t = 0.63 + fine ringlets
+          float cassiniGap = 1.0 - smoothstep(0.04, 0.0, abs(t - 0.64)) * 0.88;
+          float enckeGap = 1.0 - smoothstep(0.015, 0.0, abs(t - 0.88)) * 0.7;
+          float fineBands = 0.72 + 0.28 * sin(t * 95.0) * cos(t * 37.0);
+          float edgeFade = smoothstep(0.0, 0.08, t) * smoothstep(1.0, 0.93, t);
+          vec3 ringCol = mix(uColor * 0.78, vec3(0.97, 0.93, 0.84), fineBands);
+          gl_FragColor = vec4(ringCol, edgeFade * cassiniGap * enckeGap * 0.78);
+        } else {
+          float t = clamp((r - 1.45) / (1.88 - 1.45), 0.0, 1.0);
+          float ringlets = pow(0.5 + 0.5 * sin(t * 42.0), 2.0);
+          float edgeFade = smoothstep(0.0, 0.1, t) * smoothstep(1.0, 0.9, t);
+          gl_FragColor = vec4(uColor, edgeFade * ringlets * 0.35);
+        }
+      }
+    `,
+  });
+}

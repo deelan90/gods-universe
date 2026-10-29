@@ -152,7 +152,7 @@ export const SOLAR_SYSTEM_BODIES = [
     semiMajorAxisAu: 0,
     orbitalPeriodDays: 0,
     color: '#ffbe55',
-    nasaQuery: 'Sun solar dynamics observatory flare',
+    nasaQuery: 'Solar flare',
     heroImage: 'https://images-assets.nasa.gov/image/GSFC_20171208_Archive_e001435/GSFC_20171208_Archive_e001435~orig.jpg',
     funFacts: [
       'Contains 99.86% of the entire mass of our Solar System and fuses ~600 million tons of hydrogen into helium every second.',
@@ -173,7 +173,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 87.97,
     inHabitableZone: false,
     color: '#b8b2a6',
-    nasaQuery: 'Mercury MESSENGER planet',
+    nasaQuery: 'Mercury MESSENGER',
     heroImage: 'https://images-assets.nasa.gov/image/PIA16853/PIA16853~orig.jpg',
     funFacts: [
       'Smallest planet in our Solar System—slightly smaller in diameter than Jupiter’s moon Ganymede and Saturn’s moon Titan.',
@@ -194,7 +194,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 224.7,
     inHabitableZone: false,
     color: '#e8c488',
-    nasaQuery: 'Venus Magellan planet clouds',
+    nasaQuery: 'Venus Magellan',
     heroImage: 'https://images-assets.nasa.gov/image/PIA00271/PIA00271~orig.jpg',
     funFacts: [
       'Hottest planet in the Solar System (464°C / 867°F) due to a runaway CO₂ greenhouse atmosphere 92× denser than Earth’s.',
@@ -215,7 +215,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 365.256,
     inHabitableZone: true,
     color: '#3b82f6',
-    nasaQuery: 'Earth Blue Marble Apollo DSCOVR',
+    nasaQuery: 'Earth Blue Marble',
     heroImage: 'https://images-assets.nasa.gov/image/PIA18033/PIA18033~orig.jpg',
     funFacts: [
       'Default cosmic reference origin (0.00 km). Orbits the Sun at 29.78 km/s while riding the Sun’s 230 km/s orbit through the Milky Way.',
@@ -237,7 +237,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 27.32,
     inHabitableZone: true,
     color: '#cbd5e1',
-    nasaQuery: 'Moon Lunar Reconnaissance Orbiter full',
+    nasaQuery: 'Moon Apollo',
     heroImage: 'https://images-assets.nasa.gov/image/PIA00405/PIA00405~orig.jpg',
     funFacts: [
       'Drifting away from Earth by ~3.8 cm per year due to tidal angular momentum transfer—measured via Apollo laser retroreflectors.',
@@ -258,7 +258,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 686.98,
     inHabitableZone: true,
     color: '#ef5b36',
-    nasaQuery: 'Mars Viking Perseverance globe',
+    nasaQuery: 'Mars Perseverance',
     heroImage: 'https://images-assets.nasa.gov/image/PIA00407/PIA00407~orig.jpg',
     funFacts: [
       'Home to Olympus Mons—the tallest volcano in the Solar System at 21.9 km high (nearly 2.5× Mount Everest).',
@@ -279,7 +279,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 4332.59,
     inHabitableZone: false,
     color: '#d9a066',
-    nasaQuery: 'Jupiter Juno Cassini Great Red Spot',
+    nasaQuery: 'Jupiter Juno',
     heroImage: 'https://images-assets.nasa.gov/image/PIA22946/PIA22946~orig.jpg',
     funFacts: [
       '2.5× more massive than all other Solar System planets combined, spinning once every 9 hours 55 minutes—fastest of any planet.',
@@ -301,7 +301,7 @@ export const SOLAR_SYSTEM_BODIES = [
     inHabitableZone: false,
     hasRings: true,
     color: '#ebd294',
-    nasaQuery: 'Saturn Cassini rings portrait',
+    nasaQuery: 'Saturn Cassini',
     heroImage: 'https://images-assets.nasa.gov/image/PIA06193/PIA06193~orig.jpg',
     funFacts: [
       'Saturn’s main rings span 282,000 km across yet have a typical vertical thickness of just 10 meters!',
@@ -323,8 +323,8 @@ export const SOLAR_SYSTEM_BODIES = [
     inHabitableZone: false,
     hasRings: true,
     color: '#7dd3fc',
-    nasaQuery: 'Uranus JWST rings Voyager',
-    heroImage: 'https://images-assets.nasa.gov/image/stsci-01gwq6y342682557t0chf068a7/stsci-01gwq6y342682557t0chf068a7~orig.png',
+    nasaQuery: 'Uranus',
+    heroImage: 'https://images-assets.nasa.gov/image/PIA18182/PIA18182~orig.jpg',
     funFacts: [
       'Knocked onto its side with a 97.77° axial tilt—rolling around the Sun with 21-year-long polar summers and winters.',
       'JWST’s near-infrared camera recently revealed 11 of Uranus’s 13 dusty rings and glowing polar cloud caps in stunning clarity.',
@@ -344,7 +344,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 60182,
     inHabitableZone: false,
     color: '#3b66f5',
-    nasaQuery: 'Neptune Voyager 2 JWST',
+    nasaQuery: 'Neptune Voyager',
     heroImage: 'https://images-assets.nasa.gov/image/PIA01492/PIA01492~orig.jpg',
     funFacts: [
       'Experiences supersonic winds reaching 2,100 km/h—the fastest sustained planetary winds in the Solar System.',
@@ -365,7 +365,7 @@ export const SOLAR_SYSTEM_BODIES = [
     orbitalPeriodDays: 90560,
     inHabitableZone: false,
     color: '#d6bfa9',
-    nasaQuery: 'Pluto New Horizons Sputnik Planitia',
+    nasaQuery: 'Pluto Horizons',
     heroImage: 'https://images-assets.nasa.gov/image/PIA19952/PIA19952~orig.jpg',
     funFacts: [
       'New Horizons revealed Tombaugh Regio—a 1,000-km-wide heart-shaped nitrogen-ice glacier actively convecting on Pluto.',

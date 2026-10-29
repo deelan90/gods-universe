@@ -457,7 +457,7 @@ async function syncSatellites() {
 /**
  * 4. Sync Deep-Sky Objects (Messier / Bright NGC + Curated Landmarks)
  */
-async function syncDeepSpace() {
+export async function syncDeepSpace() {
   console.log('[Sync] Building Deep-Space Nebulae, Black Holes, Galaxies & Observable Universe Landmarks...');
   const landmarks = CURATED_COSMIC_LANDMARKS.map((item) => ({
     ...item,
@@ -516,7 +516,7 @@ async function syncDeepSpace() {
         mag: props.mag ?? 7.5,
         sizeLy: category === 'galaxy' ? 65000 : category === 'cluster' ? 95 : 14,
         color: category === 'galaxy' ? '#c4b5fd' : category === 'nebula' ? '#38bdf8' : '#fde68a',
-        nasaQuery: `${props.name || props.desig} Hubble nebula galaxy`,
+        nasaQuery: `${props.name || props.desig}`,
         heroImage: null,
         renderAs25D: false,
         funFacts: [

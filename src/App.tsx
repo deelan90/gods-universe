@@ -17,7 +17,6 @@ import { buildUnifiedCatalog } from './utils/astronomy';
 import { IS_LOCAL_DEV_HOST, resolvePublicDataUrl } from './utils/nasaImagesClient';
 import {
   UniverseScene,
-  type ProjectedHudMarker,
   type SceneTelemetrySnapshot,
 } from './engine/UniverseScene';
 import { TopTelemetryBar } from './components/TopTelemetryBar';
@@ -79,17 +78,16 @@ export const App: React.FC = () => {
   const [routeOriginId, setRouteOriginId] = useState<string>('earth');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Panels & Modals (Responsive defaults for Desktop vs Mobile)
-  const [showLeftPanel, setShowLeftPanel] = useState<boolean>(() => window.innerWidth >= 1024);
-  const [showRouteCard, setShowRouteCard] = useState<boolean>(() => window.innerWidth >= 768);
+  // Clean, spacious cinematic viewport on open; drawers toggle smoothly on demand
+  const [showLeftPanel, setShowLeftPanel] = useState<boolean>(false);
+  const [showRouteCard, setShowRouteCard] = useState<boolean>(false);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [modal25D, setModal25D] = useState<{
     image: TelescopeImage;
     spherical: boolean;
   } | null>(null);
 
-  // HUD Projections & Telemetry
-  const [hudMarkers, setHudMarkers] = useState<ProjectedHudMarker[]>([]);
+  // Throttled 4Hz Telemetry Snapshot
   const [telemetry, setTelemetry] = useState<SceneTelemetrySnapshot | null>(null);
 
   // Continual Data Sync State
@@ -161,15 +159,12 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Initialize Three.js Multi-Scale Universe Engine
+  // Initialize Three.js Multi-Scale HDR Universe Engine + Direct 60/120Hz DOM Marker Pool
   useEffect(() => {
     if (!viewportRef.current) return;
     const engine = new UniverseScene(viewportRef.current, DEFAULT_LAYERS, DEFAULT_FILTERS, {
       onSelectObject: (id) => {
         setSelectedId(id);
-      },
-      onMarkersUpdate: (markers) => {
-        setHudMarkers(markers);
       },
       onTelemetryUpdate: (snap) => {
         setTelemetry(snap);
@@ -199,53 +194,91 @@ export const App: React.FC = () => {
       });
   }, []);
 
-  const handleChangeLayers = (next: LayerVisibility) => {
+  const handleChangeLayers = useCallback((next: LayerVisibility) => {
     setLayers(next);
     sceneRef.current?.setLayers(next);
-  };
+  }, []);
 
-  const handleChangeFilters = (next: UniverseFilters) => {
+  const handleChangeFilters = useCallback((next: UniverseFilters) => {
     setFilters(next);
     sceneRef.current?.setFilters(next);
-  };
+  }, []);
 
-  const handleResetFilters = () => {
+  const handleResetFilters = useCallback(() => {
     setFilters(DEFAULT_FILTERS);
     sceneRef.current?.setFilters(DEFAULT_FILTERS);
-  };
+  }, []);
 
-  const handleOpticalMode = (mode: OpticalMode) => {
+  const handleOpticalMode = useCallback((mode: OpticalMode) => {
     setOpticalMode(mode);
     sceneRef.current?.setOpticalMode(mode);
-  };
+  }, []);
 
-  const handleTogglePlay = () => {
-    const next = !playing;
-    setPlaying(next);
-    sceneRef.current?.setTimeControls(next, timeScale);
-  };
+  const handleTogglePlay = useCallback(() => {
+    setPlaying((prev) => {
+      const next = !prev;
+      sceneRef.current?.setTimeControls(next, timeScale);
+      return next;
+    });
+  }, [timeScale]);
 
-  const handleTimeScale = (scale: number) => {
-    setTimeScale(scale);
-    sceneRef.current?.setTimeControls(playing, scale);
-  };
+  const handleTimeScale = useCallback(
+    (scale: number) => {
+      setTimeScale(scale);
+      sceneRef.current?.setTimeControls(playing, scale);
+    },
+    [playing]
+  );
 
-  const handleResetLive = () => {
+  const handleResetLive = useCallback(() => {
     setPlaying(true);
     setTimeScale(1);
     sceneRef.current?.resetToLiveNow();
-  };
+  }, []);
 
-  const handleSelectAndFly = (id: string) => {
+  const handleSelectAndFly = useCallback((id: string) => {
     setSelectedId(id);
     sceneRef.current?.selectObject(id, true);
-  };
+  }, []);
 
-  const handleSetOrigin = (id: string) => {
+  const handleFlyTo = useCallback((id: string) => {
+    sceneRef.current?.flyToObject(id);
+  }, []);
+
+  const handleSetOrigin = useCallback((id: string) => {
     setRouteOriginId(id);
     sceneRef.current?.setRouteOrigin(id);
     setShowRouteCard(true);
-  };
+  }, []);
+
+  const handleSelectTargetOnly = useCallback((id: string) => {
+    setSelectedId(id);
+    sceneRef.current?.selectObject(id, false);
+  }, []);
+
+  const handleCloseDrawer = useCallback(() => {
+    setSelectedId(null);
+    sceneRef.current?.selectObject(null, false);
+  }, []);
+
+  const handleOpen25DImage = useCallback((image: TelescopeImage, spherical: boolean) => {
+    setModal25D({ image, spherical });
+  }, []);
+
+  const handleJumpScale = useCallback(
+    (
+      preset:
+        | 'earth-orbit'
+        | 'solar-system'
+        | 'interstellar'
+        | 'milky-way'
+        | 'local-group'
+        | 'observable-universe'
+    ) => {
+      sceneRef.current?.jumpToScalePreset(preset);
+    },
+    []
+  );
 
   const handleTriggerSync = async (newIntervalHours?: number) => {
     if (newIntervalHours) setSyncIntervalHours(newIntervalHours);
@@ -268,7 +301,6 @@ export const App: React.FC = () => {
           }
         }
       } else {
-        // On GitHub Pages, re-fetch latest cloud-synced astronomical bundles with cache-busting
         await loadAllUniverseData(true);
       }
     } catch {
@@ -290,51 +322,16 @@ export const App: React.FC = () => {
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-[#02050d] text-slate-100 select-none">
-      {/* 3D WebGL Multi-Scale Observable Universe Canvas */}
+      {/* 3D WebGL Multi-Scale Observable Universe Canvas + Direct 60/120Hz DOM Marker Layer */}
       <div ref={viewportRef} className="absolute inset-0 w-full h-full" />
 
-      {/* Subtle Tactical HUD Corner Reticles (gods-eye-view aesthetic) */}
-      <div className="pointer-events-none fixed inset-3 sm:inset-5 z-10 border border-cyan-500/[0.07] rounded-2xl">
-        <div className="absolute top-0 left-0 w-5 h-5 border-t-2 border-l-2 border-cyan-400/35 rounded-tl-lg" />
-        <div className="absolute top-0 right-0 w-5 h-5 border-t-2 border-r-2 border-cyan-400/35 rounded-tr-lg" />
-        <div className="absolute bottom-0 left-0 w-5 h-5 border-b-2 border-l-2 border-cyan-400/35 rounded-bl-lg" />
-        <div className="absolute bottom-0 right-0 w-5 h-5 border-b-2 border-r-2 border-cyan-400/35 rounded-br-lg" />
-      </div>
-
-      {/* Projected Clickable 3D Celestial Name Markers */}
-      <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
-        {hudMarkers.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => {
-              setSelectedId(m.id);
-              sceneRef.current?.selectObject(m.id, false);
-            }}
-            onDoubleClick={() => handleSelectAndFly(m.id)}
-            style={{
-              transform: `translate3d(${m.x}px, ${m.y}px, 0) translate(-50%, -50%)`,
-            }}
-            className={`pointer-events-auto absolute top-0 left-0 flex items-center gap-1.5 px-2 py-0.5 rounded-md border backdrop-blur-sm transition hover:scale-105 ${
-              m.isHighlighted
-                ? 'bg-cyan-950/85 border-cyan-400 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.4)] z-20'
-                : m.isZodiac
-                  ? 'bg-amber-950/65 border-amber-400/45 text-amber-200 hover:border-amber-300'
-                  : 'bg-slate-950/65 border-slate-700/60 text-slate-200 hover:border-cyan-400/70 hover:text-white'
-            }`}
-            title="Click for Fun Facts & Imagery • Double-click to Fly Here"
-          >
-            <span
-              className="w-1.5 h-1.5 rounded-full shrink-0"
-              style={{ backgroundColor: m.color }}
-            />
-            <span className="text-[11px] font-medium whitespace-nowrap">{m.name}</span>
-            {m.tag && (
-              <span className="text-[9px] font-mono px-1 rounded bg-cyan-500/20 text-cyan-300">
-                {m.tag}
-              </span>
-            )}
-          </button>
-        ))}
+      {/* Subtle Ambient Vignette & Corner Observatory Reticles */}
+      <div className="pointer-events-none fixed inset-0 z-10 bg-[radial-gradient(circle_at_center,transparent_62%,rgba(2,5,13,0.52)_100%)]" />
+      <div className="pointer-events-none fixed inset-3 sm:inset-5 z-10">
+        <div className="absolute top-0 left-0 w-4 h-4 border-t border-l border-cyan-400/30 rounded-tl-md" />
+        <div className="absolute top-0 right-0 w-4 h-4 border-t border-r border-cyan-400/30 rounded-tr-md" />
+        <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-l border-cyan-400/30 rounded-bl-md" />
+        <div className="absolute bottom-0 right-0 w-4 h-4 border-b border-r border-cyan-400/30 rounded-br-md" />
       </div>
 
       {/* Top Omnisearch, Scale Indicator, Optical Mode & Sync Bar */}
@@ -351,6 +348,11 @@ export const App: React.FC = () => {
         onToggleLeftPanel={() => setShowLeftPanel((v) => !v)}
         showRouteCard={showRouteCard}
         onToggleRouteCard={() => setShowRouteCard((v) => !v)}
+        layers={layers}
+        onChangeLayers={handleChangeLayers}
+        filters={filters}
+        onChangeFilters={handleChangeFilters}
+        onResetFilters={handleResetFilters}
       />
 
       {/* Left Dock: Layers & Multi-Metric Celestial Filters */}
@@ -373,9 +375,9 @@ export const App: React.FC = () => {
       {/* Floating "Google Maps for the Universe" Distance & Travel Route Card */}
       {showRouteCard && (
         <div
-          className={`pointer-events-none fixed top-24 md:top-16 z-20 transition-all ${
+          className={`pointer-events-none fixed top-24 md:top-16 z-20 transition-all duration-300 ${
             selectedObject
-              ? 'right-2.5 sm:right-[25.2rem]'
+              ? 'right-2.5 sm:right-[25.8rem]'
               : 'right-2.5 sm:right-3.5'
           }`}
         >
@@ -386,28 +388,23 @@ export const App: React.FC = () => {
             targetPosLy={telemetry?.targetPosLy || null}
             searchableObjects={searchableObjects}
             onSetOriginId={handleSetOrigin}
-            onSelectTargetId={(id) => {
-              setSelectedId(id);
-              sceneRef.current?.selectObject(id, false);
-            }}
-            onFlyTo={(id) => sceneRef.current?.flyToObject(id)}
+            onSelectTargetId={handleSelectTargetOnly}
+            onFlyTo={handleFlyTo}
+            onClose={() => setShowRouteCard(false)}
           />
         </div>
       )}
 
-      {/* Right Drawer: Object Fun Facts, Telemetry & Popular/Recent Telescope Imagery */}
+      {/* Right Drawer: Hero Banner, Object Fun Facts, Telemetry & Multi-Archive Imagery */}
       <ObjectDossierDrawer
         object={selectedObject}
         originObject={originObject}
         objectPosLy={telemetry?.targetPosLy || null}
         originPosLy={telemetry?.originPosLy || [0, 0, 0]}
-        onClose={() => {
-          setSelectedId(null);
-          sceneRef.current?.selectObject(null, false);
-        }}
-        onFlyTo={(id) => sceneRef.current?.flyToObject(id)}
+        onClose={handleCloseDrawer}
+        onFlyTo={handleFlyTo}
         onSetAsOrigin={handleSetOrigin}
-        onOpen25DImage={(image, spherical) => setModal25D({ image, spherical })}
+        onOpen25DImage={handleOpen25DImage}
       />
 
       {/* Bottom Time Controls, Scale Jumps & Real-Time Solar System Velocity Odometer */}
@@ -422,7 +419,7 @@ export const App: React.FC = () => {
         onToggleHelicalMotion={() =>
           handleChangeLayers({ ...layers, helicalMotion: !layers.helicalMotion })
         }
-        onJumpScale={(preset) => sceneRef.current?.jumpToScalePreset(preset)}
+        onJumpScale={handleJumpScale}
       />
 
       {/* Interactive 2.5D / 3D Telescope Image Perspective Synthesis Modal */}
@@ -445,13 +442,16 @@ export const App: React.FC = () => {
 
       {/* Initial Loading Overlay */}
       {loading && (
-        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#02050d] gap-3">
-          <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
-          <div className="font-mono text-sm tracking-widest text-cyan-300 uppercase">
-            Initializing Observable Universe Telemetry...
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#02050d] gap-3.5">
+          <div className="relative flex items-center justify-center">
+            <div className="w-14 h-14 rounded-full border border-cyan-400/25 animate-ping absolute" />
+            <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
           </div>
-          <p className="text-xs text-slate-400">
-            Loading NASA Exoplanet Archive, HYG 3D Stars, NORAD Satellites & Deep-Sky Catalogs
+          <div className="font-display text-base font-bold tracking-wider text-white uppercase">
+            God&apos;s Universe
+          </div>
+          <p className="text-xs text-slate-400 font-mono">
+            Streaming NASA Exoplanets • HYG 3D Stars • NORAD Satellites • Deep-Sky Surveys
           </p>
         </div>
       )}

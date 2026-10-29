@@ -361,6 +361,19 @@ export function buildUnifiedCatalog(params: {
   };
 
   // 1. Solar System
+  const solarWikiMap: Record<string, string> = {
+    sun: 'Sun',
+    mercury: 'Mercury_(planet)',
+    venus: 'Venus',
+    earth: 'Earth',
+    moon: 'Moon',
+    mars: 'Mars',
+    jupiter: 'Jupiter',
+    saturn: 'Saturn',
+    uranus: 'Uranus',
+    neptune: 'Neptune',
+    pluto: 'Pluto',
+  };
   for (const b of params.deepSpace.solarSystem) {
     register({
       id: b.id,
@@ -383,7 +396,9 @@ export function buildUnifiedCatalog(params: {
       orbPeriodDays: b.orbitalPeriodDays,
       semiMajorAxisAu: b.semiMajorAxisAu,
       color: b.color,
+      wikiTitle: solarWikiMap[b.id] || b.name,
       nasaQuery: b.nasaQuery,
+      fallbackQuery: b.category === 'star' ? 'Sun SDO' : `${b.name.split(' ')[0]} planet`,
       heroImage: b.heroImage,
       renderAs25D: false,
       funFacts: b.funFacts,
@@ -394,14 +409,27 @@ export function buildUnifiedCatalog(params: {
 
   // 2. Deep-Space Landmarks & Catalog DSOs
   for (const d of [...params.deepSpace.landmarks, ...params.deepSpace.catalogDsos]) {
+    const cleanName = d.name.replace(/\s*\(.*?\)\s*/g, '').trim();
     register({
       id: d.id,
       name: d.name,
       subtitle: `${d.subType} • ${formatCosmicDistance(d.distLy).primary}`,
       category: d.category,
       color: d.color,
-      nasaQuery: d.nasaQuery,
-      fallbackQuery: d.category === 'galaxy' ? 'Hubble Webb spiral galaxy' : 'Hubble Webb nebula',
+      raDeg: d.raDeg,
+      decDeg: d.decDeg,
+      wikiTitle: cleanName,
+      nasaQuery: cleanName,
+      fallbackQuery:
+        d.category === 'galaxy'
+          ? 'Spiral galaxy'
+          : d.category === 'black-hole'
+            ? 'Black hole'
+            : d.category === 'cluster'
+              ? 'Star cluster'
+              : d.category === 'spacecraft'
+                ? 'Spacecraft'
+                : 'Hubble nebula',
       heroImage: d.heroImage,
       renderAs25D: d.renderAs25D,
       funFacts: d.funFacts,
@@ -412,20 +440,51 @@ export function buildUnifiedCatalog(params: {
 
   // 3. Satellites
   for (const s of params.satellites) {
-    const isIss = s.name.includes('ISS');
-    const isHubble = s.name.includes('HST') || s.name.toUpperCase().includes('HUBBLE');
+    const upper = s.name.toUpperCase();
+    const isIss = upper.includes('ISS');
+    const isTiangong = upper.includes('CSS') || upper.includes('TIANGONG');
+    const isHubble = upper.includes('HST') || upper.includes('HUBBLE');
+    const isStarlink = upper.includes('STARLINK');
+    const isGps = upper.includes('GPS') || upper.includes('NAVSTAR');
+    const isWeather = upper.includes('NOAA') || upper.includes('GOES') || upper.includes('METOP');
+
+    const satWiki = isIss
+      ? 'International_Space_Station'
+      : isTiangong
+        ? 'Tiangong_space_station'
+        : isHubble
+          ? 'Hubble_Space_Telescope'
+          : isStarlink
+            ? 'Starlink'
+            : isGps
+              ? 'Global_Positioning_System'
+              : isWeather
+                ? 'Weather_satellite'
+                : 'Satellite';
+
+    const satNasaQuery = isIss
+      ? 'International Space Station'
+      : isTiangong
+        ? 'Space station orbit'
+        : isHubble
+          ? 'Hubble Space Telescope'
+          : isStarlink
+            ? 'Satellite deploy'
+            : isGps
+              ? 'GPS satellite'
+              : isWeather
+                ? 'Weather satellite'
+                : 'Earth orbit satellite';
+
     register({
       id: s.id,
       name: s.name,
       subtitle: `${s.category} • NORAD #${s.noradId}`,
       category: 'satellite',
       color: isIss ? '#fde047' : isHubble ? '#c084fc' : '#38bdf8',
-      nasaQuery: isIss
-        ? 'International Space Station Earth orbit'
-        : isHubble
-          ? 'Hubble Space Telescope orbit'
-          : `${s.name.split(' ')[0]} satellite NASA Earth orbit`,
-      fallbackQuery: 'Earth observation satellite orbit NASA',
+      wikiTitle: satWiki,
+      nasaQuery: satNasaQuery,
+      fallbackQuery: 'Earth from orbit',
       heroImage: null,
       renderAs25D: false,
       funFacts: [
@@ -456,6 +515,17 @@ export function buildUnifiedCatalog(params: {
       );
     }
 
+    const typeFallback =
+      p.inHabitableZone
+        ? 'Habitable exoplanet'
+        : p.planetType === 'Gas Giant'
+          ? 'Hot Jupiter'
+          : p.planetType === 'Ice Giant'
+            ? 'Neptune exoplanet'
+            : p.planetType === 'Lava World'
+              ? 'Lava planet'
+              : 'Rocky exoplanet';
+
     register({
       id: p.id,
       name: p.name,
@@ -475,8 +545,11 @@ export function buildUnifiedCatalog(params: {
       discFacility: p.discFacility,
       isRecent: p.isRecent,
       color: exoplanetColorFromType(p.planetType, p.inHabitableZone),
-      nasaQuery: `${p.name} exoplanet`,
-      fallbackQuery: `${p.discFacility.includes('JWST') || p.discFacility.includes('Webb') ? 'Webb' : p.discFacility.includes('TESS') ? 'TESS' : 'Kepler'} exoplanet ${p.planetType}`,
+      raDeg: p.ra,
+      decDeg: p.dec,
+      wikiTitle: p.name.replace(/\s+([b-i])$/, '$1'), // e.g. "TRAPPIST-1 e" -> "TRAPPIST-1e"
+      nasaQuery: p.hostStar,
+      fallbackQuery: typeFallback,
       heroImage: null,
       renderAs25D: false,
       funFacts: facts,
@@ -496,6 +569,15 @@ export function buildUnifiedCatalog(params: {
       facts.push(`One of our Solar System’s closest stellar neighbors—light leaving this star today reaches Earth in just ${st.distLy.toFixed(1)} years!`);
     }
 
+    const starFallback =
+      st.solarRadii > 12
+        ? 'Red supergiant'
+        : st.specClass === 'M'
+          ? 'Red dwarf'
+          : st.specClass === 'O' || st.specClass === 'B'
+            ? 'Blue star'
+            : 'Hubble star';
+
     register(
       {
         id: st.id,
@@ -509,15 +591,18 @@ export function buildUnifiedCatalog(params: {
         hzInnerAu: st.hzInnerAu,
         hzOuterAu: st.hzOuterAu,
         color: starColorFromTempOrClass(st.teff, st.specClass),
-        nasaQuery: isNamed ? `${st.proper} star Hubble` : `star cluster ${st.specClass} type Hubble`,
-        fallbackQuery: 'Hubble star field stellar',
+        raDeg: st.ra,
+        decDeg: st.dec,
+        wikiTitle: isNamed ? st.proper : null,
+        nasaQuery: isNamed ? `${st.proper}` : starFallback,
+        fallbackQuery: starFallback,
         heroImage: null,
         renderAs25D: false,
         funFacts: facts,
         basePosLy: st.posLy,
         raw: st,
       },
-      isNamed || st.distLy < 35 || st.mag < 3.8 // Keep omnisearch ultra-snappy while indexing all named/bright/nearby stars
+      isNamed || st.distLy < 35 || st.mag < 3.8
     );
   }
 
@@ -531,8 +616,11 @@ export function buildUnifiedCatalog(params: {
         : `IAU Constellation (${c.id})`,
       category: 'constellation',
       color: c.isZodiac ? '#fbbf24' : '#60a5fa',
-      nasaQuery: `${c.name} constellation nebula`,
-      fallbackQuery: 'deep sky nebula star cluster Hubble',
+      raDeg: c.raDeg,
+      decDeg: c.decDeg,
+      wikiTitle: `${c.name}_(constellation)`,
+      nasaQuery: c.name,
+      fallbackQuery: 'Star cluster nebula',
       heroImage: null,
       renderAs25D: false,
       funFacts: c.zodiac
