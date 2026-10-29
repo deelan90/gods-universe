@@ -22,7 +22,7 @@ interface Props {
   filters: UniverseFilters;
   onChangeFilters: (filters: UniverseFilters) => void;
   onResetFilters: () => void;
-  matchedCounts: { exoplanets: number; stars: number; satellites: number };
+  matchedCounts: { exoplanets: number; stars: number; satellites: number; deepSpace?: number };
   onCloseMobile?: () => void;
 }
 
@@ -117,16 +117,17 @@ export const LayerAndFilterPanel: React.FC<Props> = React.memo(
 
               {(
                 [
+                  ['simGrid', 'Astrometric Simulation Grid & RA/Dec', 'Logarithmic range rings, bearings & GEO belt'],
                   ['satellites', 'Live Earth Satellites (NORAD SGP4)', '458 active LEO/MEO/GEO spacecraft'],
-                  ['planetOrbits', 'Solar System Orbital Paths', '3D J2000 elliptical trajectories'],
+                  ['planetOrbits', 'Solar System Orbital Paths', '3D velocity-wake elliptical trajectories'],
                   ['constellations', '88 IAU Constellations (3D)', 'True 3D Hipparcos star stick vectors'],
                   ['zodiacSigns', '12 Zodiac Star Signs & Ecliptic', '♈–♓ star signs & ecliptic ring'],
                   ['habitableZones', 'Star Habitable Zones (Goldilocks)', 'Liquid-water orbital rings around stars'],
                   ['exoplanets', 'NASA Confirmed Exoplanets', '6,400+ worlds from Caltech TAP archive'],
-                  ['deepSpace', '2.5D Telescope Nebulae & Galaxies', 'JWST, Hubble & EHT 3D-perspective models'],
-                  ['cosmicWeb', 'Milky Way, Cosmic Web & CMB', 'Spiral arms, filaments & 46.5 Gly horizon'],
+                  ['deepSpace', 'OpenNGC Galaxies, Nebulae & 2.5D', '2,649 spiral galaxies, nebulae & clusters'],
+                  ['cosmicWeb', 'Milky Way, Cosmic Web & CMB', 'Spiral arms, redshift filaments & 46.5 Gly CMB'],
                   ['helicalMotion', 'Solar System Velocity & Vortex Trail', 'Real-time 230 km/s galactic corkscrew'],
-                  ['labels', 'Interactive Name Markers', 'Zero-lag 120Hz HUD telemetry labels'],
+                  ['labels', 'Interactive Name Markers', 'Zero-lag 120Hz simulation callouts'],
                   ['trueScaleBodies', 'Strict 1:1 Planet Radii', 'Disable adaptive readable size boost'],
                 ] as [keyof LayerVisibility, string, string][]
               ).map(([key, title, desc]) => (
@@ -473,9 +474,16 @@ export const LayerAndFilterPanel: React.FC<Props> = React.memo(
 
               {/* Satellites & Deep Space Category Filters */}
               <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.08] space-y-2.5">
-                <div className="flex items-center gap-1.5 font-display font-semibold text-slate-100">
-                  <Satellite className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Satellites & Deep-Sky Objects</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-display font-semibold text-slate-100">
+                    <Satellite className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Satellites &amp; Deep-Sky Objects</span>
+                  </div>
+                  {matchedCounts.deepSpace !== undefined && (
+                    <span className="font-mono text-[10px] text-purple-300">
+                      {matchedCounts.deepSpace.toLocaleString()} DSOs
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between gap-2">

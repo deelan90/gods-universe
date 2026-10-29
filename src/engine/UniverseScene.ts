@@ -36,10 +36,14 @@ import {
 } from '../utils/astronomy';
 import {
   createCosmicPointsMaterial,
+  createDeepSkySimulationMaterial,
+  createDirectionalOrbitMaterial,
   createHabitableZoneMaterial,
   createPlanetaryRingMaterial,
   createProceduralPlanetMaterial,
+  createSimulationGridMaterial,
   createStarSurfaceMaterial,
+  createTargetReticleMaterial,
   createTelescope25DMaterial,
   createTexturedEarthMaterial,
   createTexturedPlanetMaterial,
@@ -62,6 +66,7 @@ export interface SceneTelemetrySnapshot {
     exoplanets: number;
     stars: number;
     satellites: number;
+    deepSpace?: number;
   };
 }
 
@@ -85,7 +90,7 @@ const PLANET_TEXTURE_URLS: Record<string, string> = {
   milkyWayPanorama: 'https://commons.wikimedia.org/wiki/Special:FilePath/Solarsystemscope_texture_2k_stars_milky_way.jpg?width=1024',
 };
 
-const MAX_DOM_MARKERS = 24;
+const MAX_DOM_MARKERS = 30;
 
 interface DomMarkerSlot {
   el: HTMLButtonElement;
@@ -119,6 +124,8 @@ export class UniverseScene {
   private labelSatellites: CompiledSatellite[] = [];
   private labelStars: StarRecord[] = [];
   private labelExoplanets: ExoplanetRecord[] = [];
+  private labelNebulae: DeepSpaceRecord[] = [];
+  private labelGalaxies: DeepSpaceRecord[] = [];
   private hasActiveExoFilter: boolean = false;
 
   // Floating-origin 64-bit state (in Light-Years)
@@ -149,6 +156,7 @@ export class UniverseScene {
 
   // Scene Groups
   private skyPanoramaMesh: THREE.Mesh | null = null;
+  private simOverlayGroup = new THREE.Group();
   private heliocentricMacroGroup = new THREE.Group();
   private solarSystemGroup = new THREE.Group();
   private satelliteGroup = new THREE.Group();
@@ -158,6 +166,14 @@ export class UniverseScene {
   private routeGroup = new THREE.Group();
 
   // Specific Meshes & Materials
+  private simGridMesh: THREE.Mesh | null = null;
+  private celestialGraticuleLines: THREE.LineSegments | null = null;
+  private celestialEquatorLine: THREE.Line | null = null;
+  private earthGeoWireMesh: THREE.Mesh | null = null;
+  private earthGeoRingLine: THREE.Line | null = null;
+  private targetReticleMesh: THREE.Mesh | null = null;
+  private targetDropLine: THREE.Line | null = null;
+
   private solarMeshes: Map<string, THREE.Object3D> = new Map();
   private solarOrbitLines: Map<string, THREE.Line> = new Map();
   private sunHabitableZoneMesh: THREE.Mesh | null = null;
@@ -169,6 +185,8 @@ export class UniverseScene {
   private constellationLinesMesh: THREE.LineSegments | null = null;
   private zodiacLinesMesh: THREE.LineSegments | null = null;
   private zodiacEclipticRing: THREE.Line | null = null;
+  private dsoSimMesh: THREE.Mesh | null = null;
+  private dsoSimRecords: DeepSpaceRecord[] = [];
   private milkyWayPoints: THREE.Points | null = null;
   private cosmicWebPoints: THREE.Points | null = null;
   private cosmicWebLines: THREE.LineSegments | null = null;
@@ -188,7 +206,7 @@ export class UniverseScene {
 
   private layers: LayerVisibility;
   private filters: UniverseFilters;
-  private matchedCounts = { exoplanets: 0, stars: 0, satellites: 0 };
+  private matchedCounts = { exoplanets: 0, stars: 0, satellites: 0, deepSpace: 0 };
 
   // Loop & Perf
   private rafId: number = 0;
@@ -267,7 +285,9 @@ export class UniverseScene {
     });
 
     this.buildSkyPanorama();
+    this.buildSimulationOverlays();
 
+    this.scene.add(this.simOverlayGroup);
     this.scene.add(this.heliocentricMacroGroup);
     this.scene.add(this.solarSystemGroup);
     this.scene.add(this.satelliteGroup);
@@ -307,24 +327,143 @@ export class UniverseScene {
     this.scene.add(this.skyPanoramaMesh);
   }
 
+  /**
+   * Build Scientific Simulation Overlays:
+   * 1. Multi-Decade Logarithmic Polar Astrometric Reference Grid
+   * 2. J2000 Celestial RA / Dec Coordinate Graticule Dome
+   * 3. Animated 3D Target Lock-On Vernier Reticle & Elevation Drop-Stem
+   */
+  private buildSimulationOverlays() {
+    this.simOverlayGroup.clear();
+
+    // 1. Camera-adaptive Logarithmic Polar Astrometric Grid
+    const gridMat = createSimulationGridMaterial();
+    this.animatedMaterials.add(gridMat);
+    this.simGridMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), gridMat);
+    this.simGridMesh.rotation.x = -Math.PI / 2;
+    this.simGridMesh.frustumCulled = false;
+    this.simGridMesh.renderOrder = -10;
+    this.simOverlayGroup.add(this.simGridMesh);
+
+    // 2. J2000 Celestial RA/Dec Coordinate Graticule (camera-centered planetarium dome)
+    const gratVerts: number[] = [];
+    const domeR = 460;
+    const deg2rad = Math.PI / 180;
+    // Meridians every 30° RA (2h intervals)
+    for (let raDeg = 0; raDeg < 360; raDeg += 30) {
+      const ra = raDeg * deg2rad;
+      for (let decDeg = -75; decDeg < 75; decDeg += 5) {
+        const d1 = decDeg * deg2rad;
+        const d2 = (decDeg + 5) * deg2rad;
+        gratVerts.push(
+          domeR * Math.cos(d1) * Math.cos(ra),
+          domeR * Math.sin(d1),
+          -domeR * Math.cos(d1) * Math.sin(ra),
+          domeR * Math.cos(d2) * Math.cos(ra),
+          domeR * Math.sin(d2),
+          -domeR * Math.cos(d2) * Math.sin(ra)
+        );
+      }
+    }
+    // Parallels at -60°, -30°, +30°, +60° Declination
+    for (const decDeg of [-60, -30, 30, 60]) {
+      const dec = decDeg * deg2rad;
+      const cosD = Math.cos(dec);
+      const sinD = Math.sin(dec);
+      for (let raDeg = 0; raDeg < 360; raDeg += 6) {
+        const r1 = raDeg * deg2rad;
+        const r2 = (raDeg + 6) * deg2rad;
+        gratVerts.push(
+          domeR * cosD * Math.cos(r1),
+          domeR * sinD,
+          -domeR * cosD * Math.sin(r1),
+          domeR * cosD * Math.cos(r2),
+          domeR * sinD,
+          -domeR * cosD * Math.sin(r2)
+        );
+      }
+    }
+    const gratGeo = new THREE.BufferGeometry();
+    gratGeo.setAttribute('position', new THREE.Float32BufferAttribute(gratVerts, 3));
+    this.celestialGraticuleLines = new THREE.LineSegments(
+      gratGeo,
+      new THREE.LineBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.065,
+        depthWrite: false,
+        depthTest: false,
+      })
+    );
+    this.celestialGraticuleLines.renderOrder = -950;
+    this.celestialGraticuleLines.frustumCulled = false;
+    this.simOverlayGroup.add(this.celestialGraticuleLines);
+
+    // Highlighted 0° J2000 Celestial Equator
+    const eqPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 120; i++) {
+      const ra = (i / 120) * Math.PI * 2;
+      eqPts.push(new THREE.Vector3(domeR * Math.cos(ra), 0, -domeR * Math.sin(ra)));
+    }
+    this.celestialEquatorLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(eqPts),
+      new THREE.LineBasicMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.14,
+        depthWrite: false,
+        depthTest: false,
+      })
+    );
+    this.celestialEquatorLine.renderOrder = -949;
+    this.celestialEquatorLine.frustumCulled = false;
+    this.simOverlayGroup.add(this.celestialEquatorLine);
+
+    // 3. Animated 3D Target Lock-On Reticle + Coordinate Plane Drop-Stem
+    const retMat = createTargetReticleMaterial();
+    this.animatedMaterials.add(retMat);
+    this.targetReticleMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), retMat);
+    this.targetReticleMesh.visible = false;
+    this.targetReticleMesh.frustumCulled = false;
+    this.targetReticleMesh.renderOrder = 20;
+    this.simOverlayGroup.add(this.targetReticleMesh);
+
+    const dropGeo = new THREE.BufferGeometry();
+    dropGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
+    this.targetDropLine = new THREE.Line(
+      dropGeo,
+      new THREE.LineDashedMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.55,
+        dashSize: 1,
+        gapSize: 0.6,
+        depthWrite: false,
+      })
+    );
+    this.targetDropLine.visible = false;
+    this.targetDropLine.frustumCulled = false;
+    this.simOverlayGroup.add(this.targetDropLine);
+  }
+
   private initDomMarkerPool() {
     for (let i = 0; i < MAX_DOM_MARKERS; i++) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.style.display = 'none';
       btn.style.willChange = 'transform';
-      // IMPORTANT: No backdrop-filter on moving 3D markers — avoids 24 per-frame GPU framebuffer readbacks!
+      // IMPORTANT: No backdrop-filter on moving 3D markers — avoids per-frame GPU framebuffer readbacks!
       btn.className =
-        'pointer-events-auto absolute top-0 left-0 flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border transition-colors duration-150 bg-[#050b18]/90 border-white/14 text-slate-100 hover:border-cyan-400/80 hover:bg-cyan-950/90 shadow-md cursor-pointer';
+        'pointer-events-auto absolute top-0 left-0 flex items-center gap-1.5 px-2 py-0.5 rounded-md border transition-colors duration-150 bg-[#040a16]/90 border-cyan-400/20 text-slate-100 hover:border-cyan-400/85 hover:bg-cyan-950/90 shadow-md cursor-pointer';
 
       const dot = document.createElement('span');
       dot.className = 'w-1.5 h-1.5 rounded-full shrink-0';
 
       const label = document.createElement('span');
-      label.className = 'text-[11px] font-medium tracking-tight whitespace-nowrap';
+      label.className = 'text-[10.5px] font-mono font-medium tracking-tight whitespace-nowrap';
 
       const tag = document.createElement('span');
-      tag.className = 'text-[9px] font-mono font-semibold px-1.5 rounded-full bg-cyan-400/20 text-cyan-300';
+      tag.className = 'text-[9px] font-mono font-semibold px-1 rounded bg-cyan-400/18 text-cyan-300 uppercase';
       tag.style.display = 'none';
 
       btn.append(dot, label, tag);
@@ -418,6 +557,22 @@ export class UniverseScene {
           p.name.startsWith('Proxima')
       )
       .slice(0, 32);
+
+    // Pre-filter top Messier & named Nebulae/Clusters + Galaxies for zero-lag HUD callouts
+    this.labelNebulae = params.deepSpace.catalogDsos
+      .filter(
+        (d) =>
+          (d.category === 'nebula' || d.category === 'cluster') &&
+          (Boolean(d.messier) || !/^(NGC|IC)\s+\d+$/i.test(d.name))
+      )
+      .slice(0, 48);
+    this.labelGalaxies = params.deepSpace.catalogDsos
+      .filter(
+        (d) =>
+          d.category === 'galaxy' &&
+          (Boolean(d.messier) || !/^(NGC|IC)\s+\d+$/i.test(d.name))
+      )
+      .slice(0, 56);
 
     this.buildSolarSystem();
     this.buildSatellitesLayer();
@@ -578,6 +733,20 @@ export class UniverseScene {
           `,
         });
         holder.add(new THREE.Mesh(new THREE.SphereGeometry(1.045, 40, 40), atmoMat));
+
+        // Subtle Geodetic Latitude / Longitude Simulation Wireframe Overlay on Earth
+        this.earthGeoWireMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(1.006, 24, 12),
+          new THREE.MeshBasicMaterial({
+            color: '#22d3ee',
+            wireframe: true,
+            transparent: true,
+            opacity: 0.055,
+            depthWrite: false,
+          })
+        );
+        this.earthGeoWireMesh.visible = this.layers.simGrid;
+        holder.add(this.earthGeoWireMesh);
       } else {
         const texUrl = PLANET_TEXTURE_URLS[body.id];
         let mat: THREE.ShaderMaterial;
@@ -630,11 +799,10 @@ export class UniverseScene {
           }
           const orbitGeo = new THREE.BufferGeometry();
           orbitGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-          const orbitMat = new THREE.LineBasicMaterial({
-            color: body.color,
-            transparent: true,
-            opacity: body.id === 'earth' ? 0.35 : 0.18,
-          });
+          const orbitMat = createDirectionalOrbitMaterial(
+            body.color,
+            body.id === 'earth' ? 0.85 : body.id === 'moon' ? 0.72 : 0.62
+          );
           const orbitLine = new THREE.Line(orbitGeo, orbitMat);
           orbitLine.frustumCulled = false;
           this.solarOrbitLines.set(body.id, orbitLine);
@@ -687,6 +855,30 @@ export class UniverseScene {
     this.satellitePoints = new THREE.Points(geo, mat);
     this.satellitePoints.frustumCulled = false;
     this.satelliteGroup.add(this.satellitePoints);
+
+    // Geostationary Orbit Belt Reference Ring (35,786 km altitude = 42,157 km geocentric radius)
+    const geoBeltRadiusUnits = (6371 + 35786) / RENDER_KM_UNIT;
+    const geoBeltPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 128; i++) {
+      const a = (i / 128) * Math.PI * 2;
+      geoBeltPts.push(
+        new THREE.Vector3(Math.cos(a) * geoBeltRadiusUnits, 0, Math.sin(a) * geoBeltRadiusUnits)
+      );
+    }
+    this.earthGeoRingLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(geoBeltPts),
+      new THREE.LineDashedMaterial({
+        color: '#22d3ee',
+        transparent: true,
+        opacity: 0.24,
+        dashSize: 1.8,
+        gapSize: 1.1,
+        depthWrite: false,
+      })
+    );
+    this.earthGeoRingLine.computeLineDistances();
+    this.earthGeoRingLine.frustumCulled = false;
+    this.satelliteGroup.add(this.earthGeoRingLine);
   }
 
   private buildStarsLayer() {
@@ -881,11 +1073,33 @@ export class UniverseScene {
     this.landmarkMeshes.clear();
     this.pendingLandmarkTextures = [];
     this.deepSpaceTexturesLoaded = false;
+
+    if (this.dsoSimMesh) {
+      this.heliocentricMacroGroup.remove(this.dsoSimMesh);
+      this.dsoSimMesh = null;
+    }
+    if (this.milkyWayPoints) {
+      this.heliocentricMacroGroup.remove(this.milkyWayPoints);
+      this.milkyWayPoints = null;
+    }
+    if (this.cosmicWebLines) {
+      this.heliocentricMacroGroup.remove(this.cosmicWebLines);
+      this.cosmicWebLines = null;
+    }
+    if (this.cosmicWebPoints) {
+      this.heliocentricMacroGroup.remove(this.cosmicWebPoints);
+      this.cosmicWebPoints = null;
+    }
+    if (this.cmbSphereMesh) {
+      this.heliocentricMacroGroup.remove(this.cmbSphereMesh);
+      this.cmbSphereMesh = null;
+    }
+
     if (!this.deepSpace) return;
 
     const allDeep: DeepSpaceRecord[] = [...this.deepSpace.landmarks, ...this.deepSpace.catalogDsos];
     const sharedPlane25D = new THREE.PlaneGeometry(1, 1, 24, 24);
-    const sharedGlowPlane = new THREE.PlaneGeometry(1, 1);
+    this.dsoSimRecords = [];
 
     // Placeholder 1x1 dark pixel texture until deep-space textures lazy-load on zoom-out
     const placeholderData = new Uint8Array([18, 28, 48, 255]);
@@ -918,62 +1132,107 @@ export class UniverseScene {
         this.landmarkMeshes.set(d.id, mesh);
         this.landmarkGroup.add(mesh);
       } else {
-        // Soft additive radial nebula/cluster glow disc (NO giant enclosing wireframe spheres!)
-        const glowMat = new THREE.ShaderMaterial({
-          transparent: true,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-          side: THREE.DoubleSide,
-          uniforms: {
-            uColor: { value: new THREE.Color(d.color) },
-            uAlpha: { value: d.category === 'cosmic-structure' ? 0.22 : 0.55 },
-          },
-          vertexShader: /* glsl */ `
-            #include <common>
-            #include <logdepthbuf_pars_vertex>
-            varying vec2 vUv;
-            void main() {
-              vUv = uv;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-              #include <logdepthbuf_vertex>
-            }
-          `,
-          fragmentShader: /* glsl */ `
-            #include <common>
-            #include <logdepthbuf_pars_fragment>
-            uniform vec3 uColor;
-            uniform float uAlpha;
-            varying vec2 vUv;
-            void main() {
-              #include <logdepthbuf_fragment>
-              float r = length(vUv - 0.5) * 2.0;
-              if (r > 1.0) discard;
-              float x = 1.0 - r;
-              gl_FragColor = vec4(uColor, x * x * uAlpha);
-            }
-          `,
-        });
-        const capSizeLy =
-          d.category === 'cosmic-structure'
-            ? Math.min(d.sizeLy * 0.25, d.distLy * 0.35)
-            : Math.max(0.1, d.sizeLy * 0.6);
-        const mesh = new THREE.Mesh(sharedGlowPlane, glowMat);
-        mesh.userData = {
-          objectId: d.id,
-          category: d.category,
-          distLy: d.distLy,
-          baseSizeLy: capSizeLy,
-          posLy: d.posLy,
-        };
-        this.landmarkMeshes.set(d.id, mesh);
-        this.landmarkGroup.add(mesh);
+        this.dsoSimRecords.push(d);
       }
+    }
+
+    // Single-Draw-Call Instanced Morphological Deep-Sky Simulation Mesh (~2,630 Galaxies, Nebulae & Star Clusters!)
+    const simCount = this.dsoSimRecords.length;
+    if (simCount > 0) {
+      const baseQuad = new THREE.PlaneGeometry(2, 2); // [-1, 1] local billboard coordinates
+      const instGeo = new THREE.InstancedBufferGeometry();
+      instGeo.index = baseQuad.index;
+      instGeo.attributes.position = baseQuad.attributes.position;
+      instGeo.attributes.uv = baseQuad.attributes.uv;
+      instGeo.instanceCount = simCount;
+
+      const centerPos = new Float32Array(simCount * 3);
+      const baseRadius = new Float32Array(simCount);
+      const morphArr = new Float32Array(simCount);
+      const shapeArr = new Float32Array(simCount * 3); // axisRatio, posAngleRad, seed
+      const priColArr = new Float32Array(simCount * 3);
+      const secColArr = new Float32Array(simCount * 3);
+      const alphaArr = new Float32Array(simCount);
+      const highArr = new Float32Array(simCount);
+
+      const cPri = new THREE.Color();
+      const cSec = new THREE.Color();
+
+      for (let i = 0; i < simCount; i++) {
+        const d = this.dsoSimRecords[i];
+        centerPos[i * 3] = d.posLy[0] * RENDER_UNITS_PER_LY;
+        centerPos[i * 3 + 1] = d.posLy[1] * RENDER_UNITS_PER_LY;
+        centerPos[i * 3 + 2] = d.posLy[2] * RENDER_UNITS_PER_LY;
+
+        const physRadLy =
+          d.category === 'cosmic-structure'
+            ? Math.min(d.sizeLy * 0.16, d.distLy * 0.25)
+            : Math.max(0.8, d.sizeLy * 0.65);
+        baseRadius[i] = physRadLy * RENDER_UNITS_PER_LY;
+
+        const mCode =
+          d.morphCode !== undefined
+            ? d.morphCode
+            : d.category === 'galaxy'
+              ? 0
+              : d.category === 'nebula'
+                ? 3
+                : 5;
+        morphArr[i] = mCode;
+
+        const axRatio = d.axisRatio ?? 0.72;
+        const paRad = ((d.posAngleDeg ?? (i * 37) % 180) * Math.PI) / 180;
+        const seed = ((i * 0.61803398875) % 1) + 0.05;
+        shapeArr[i * 3] = axRatio;
+        shapeArr[i * 3 + 1] = paRad;
+        shapeArr[i * 3 + 2] = seed;
+
+        cPri.set(d.color || '#60a5fa');
+        if (mCode === 3) {
+          // Emission / Reflection Nebula: H-alpha primary + O-III cyan-teal core
+          cSec.set('#22d3ee');
+        } else if (mCode === 4) {
+          // Planetary Nebula / SNR: O-III teal shell + H-alpha rose outer filament
+          cSec.set('#fb7185');
+        } else if (mCode <= 1) {
+          // Spiral / Barred Spiral: blue-violet arms + warm star-forming knots
+          cSec.set('#f472b6');
+        } else {
+          cSec.set('#fef3c7');
+        }
+
+        priColArr[i * 3] = cPri.r;
+        priColArr[i * 3 + 1] = cPri.g;
+        priColArr[i * 3 + 2] = cPri.b;
+
+        secColArr[i * 3] = cSec.r;
+        secColArr[i * 3 + 1] = cSec.g;
+        secColArr[i * 3 + 2] = cSec.b;
+
+        alphaArr[i] = d.category === 'cosmic-structure' ? 0.36 : 0.88;
+        highArr[i] = 0.0;
+      }
+
+      instGeo.setAttribute('aCenterPos', new THREE.InstancedBufferAttribute(centerPos, 3));
+      instGeo.setAttribute('aBaseRadius', new THREE.InstancedBufferAttribute(baseRadius, 1));
+      instGeo.setAttribute('aMorph', new THREE.InstancedBufferAttribute(morphArr, 1));
+      instGeo.setAttribute('aShape', new THREE.InstancedBufferAttribute(shapeArr, 3));
+      instGeo.setAttribute('aPrimaryCol', new THREE.InstancedBufferAttribute(priColArr, 3));
+      instGeo.setAttribute('aSecondaryCol', new THREE.InstancedBufferAttribute(secColArr, 3));
+      instGeo.setAttribute('aAlpha', new THREE.InstancedBufferAttribute(alphaArr, 1));
+      instGeo.setAttribute('aHighlight', new THREE.InstancedBufferAttribute(highArr, 1));
+
+      const simMat = createDeepSkySimulationMaterial();
+      this.animatedMaterials.add(simMat);
+      this.dsoSimMesh = new THREE.Mesh(instGeo, simMat);
+      this.dsoSimMesh.frustumCulled = false;
+      this.heliocentricMacroGroup.add(this.dsoSimMesh);
     }
 
     // 3D Milky Way Barred Spiral Galaxy Disk
     const sgrA = this.deepSpace.landmarks.find((l) => l.id === 'sagittarius-a-star');
     const galCenterLy = sgrA ? sgrA.posLy : [-1300, -12900, 23300];
-    const mwCount = 4800;
+    const mwCount = 5400;
     const mwPos = new Float32Array(mwCount * 3);
     const mwCol = new Float32Array(mwCount * 3);
     const mwScale = new Float32Array(mwCount);
@@ -981,7 +1240,7 @@ export class UniverseScene {
     const mwHigh = new Float32Array(mwCount);
     const cCore = new THREE.Color('#fde68a');
     const cArm = new THREE.Color('#7dd3fc');
-    const cDust = new THREE.Color('#c084fc');
+    const cDust = new THREE.Color('#f472b6');
 
     const gNorth = new THREE.Vector3(
       Math.cos(0.4735) * Math.cos(3.366),
@@ -994,9 +1253,9 @@ export class UniverseScene {
     for (let i = 0; i < mwCount; i++) {
       const arm = i % 4;
       const u = Math.pow(Math.random(), 0.72);
-      const rLy = 1200 + u * 54000;
-      const theta = (arm * Math.PI) / 2 + Math.log(1 + rLy / 3800) * 2.55 + (Math.random() - 0.5) * (0.55 + u * 0.4);
-      const thicknessLy = (Math.random() - 0.5) * (rLy < 7000 ? 3200 : 1400);
+      const rLy = 1000 + u * 54000;
+      const theta = (arm * Math.PI) / 2 + Math.log(1 + rLy / 3800) * 2.55 + (Math.random() - 0.5) * (0.52 + u * 0.38);
+      const thicknessLy = (Math.random() - 0.5) * (rLy < 7000 ? 3200 : 1300);
 
       const px = galCenterLy[0] + (Math.cos(theta) * gToSun.x + Math.sin(theta) * gTangent.x) * rLy + gNorth.x * thicknessLy;
       const py = galCenterLy[1] + (Math.cos(theta) * gToSun.y + Math.sin(theta) * gTangent.y) * rLy + gNorth.y * thicknessLy;
@@ -1010,8 +1269,8 @@ export class UniverseScene {
       mwCol[i * 3] = col.r;
       mwCol[i * 3 + 1] = col.g;
       mwCol[i * 3 + 2] = col.b;
-      mwScale[i] = rLy < 8000 ? 1.8 : 1.1;
-      mwAlpha[i] = 0.35;
+      mwScale[i] = rLy < 8000 ? 1.85 : 1.15;
+      mwAlpha[i] = 0.38;
       mwHigh[i] = 0;
     }
 
@@ -1028,13 +1287,22 @@ export class UniverseScene {
     this.milkyWayPoints.frustumCulled = false;
     this.heliocentricMacroGroup.add(this.milkyWayPoints);
 
-    // 3D Cosmic Web Filaments & 46.5-Gly CMB Horizon (Extragalactic Scale LOD!)
-    const nodesCount = 240;
+    // 3D Cosmic Web Filaments anchored to REAL OpenNGC Redshift Galaxy Clusters + Deep-Field Superclusters!
     const webNodes: THREE.Vector3[] = [];
-    for (let i = 0; i < nodesCount; i++) {
-      const logMin = Math.log10(8e6);
+    const realGalaxies = this.deepSpace.catalogDsos.filter(
+      (g) => g.category === 'galaxy' && g.distLy >= 8_000_000 && g.distLy <= 450_000_000
+    );
+    const stride = Math.max(1, Math.floor(realGalaxies.length / 150));
+    for (let i = 0; i < realGalaxies.length && webNodes.length < 150; i += stride) {
+      const g = realGalaxies[i];
+      webNodes.push(new THREE.Vector3(g.posLy[0], g.posLy[1], g.posLy[2]));
+    }
+    // Extend out from 350 Mly to 41 Gly for the macro Observable Universe horizon
+    const deepNodesCount = 150;
+    for (let i = 0; i < deepNodesCount; i++) {
+      const logMin = Math.log10(3.2e8);
       const logMax = Math.log10(4.1e10);
-      const rLy = Math.pow(10, logMin + (i / nodesCount) * (logMax - logMin));
+      const rLy = Math.pow(10, logMin + (i / deepNodesCount) * (logMax - logMin));
       const phi = Math.acos(1 - 2 * ((i * 0.61803398875) % 1));
       const theta = i * 2.39996323;
       webNodes.push(
@@ -1053,14 +1321,15 @@ export class UniverseScene {
     const galFieldAlpha: number[] = [];
     const galFieldHigh: number[] = [];
     const cFil1 = new THREE.Color('#818cf8');
-    const cFil2 = new THREE.Color('#38bdf8');
+    const cFil2 = new THREE.Color('#22d3ee');
     const cFil3 = new THREE.Color('#f472b6');
 
-    for (let i = 0; i < nodesCount; i++) {
+    for (let i = 0; i < webNodes.length; i++) {
       const a = webNodes[i];
+      const maxLinkDist = a.length() * 0.68;
       const neighbors = webNodes
         .map((b, idx) => ({ idx, b, d: a.distanceTo(b) }))
-        .filter((n) => n.idx > i && n.d < a.length() * 0.75)
+        .filter((n) => n.idx > i && n.d > 1_200_000 && n.d < maxLinkDist)
         .sort((x, y) => x.d - y.d)
         .slice(0, 2);
 
@@ -1074,17 +1343,17 @@ export class UniverseScene {
           nb.b.z * RENDER_UNITS_PER_LY
         );
 
-        for (let s = 0; s < 9; s++) {
-          const t = Math.random();
-          const spread = a.length() * 0.035;
-          const gx = THREE.MathUtils.lerp(a.x, nb.b.x, t) + (Math.random() - 0.5) * spread;
-          const gy = THREE.MathUtils.lerp(a.y, nb.b.y, t) + (Math.random() - 0.5) * spread;
-          const gz = THREE.MathUtils.lerp(a.z, nb.b.z, t) + (Math.random() - 0.5) * spread;
+        for (let s = 0; s < 8; s++) {
+          const t = (s + 0.5) / 8;
+          const spread = a.length() * 0.028;
+          const gx = THREE.MathUtils.lerp(a.x, nb.b.x, t) + (Math.sin(i * 7.1 + s * 3.3) * 0.5) * spread;
+          const gy = THREE.MathUtils.lerp(a.y, nb.b.y, t) + (Math.cos(i * 5.3 + s * 2.7) * 0.5) * spread;
+          const gz = THREE.MathUtils.lerp(a.z, nb.b.z, t) + (Math.sin(i * 3.9 + s * 4.1) * 0.5) * spread;
           galFieldPos.push(gx * RENDER_UNITS_PER_LY, gy * RENDER_UNITS_PER_LY, gz * RENDER_UNITS_PER_LY);
           const col = s % 3 === 0 ? cFil3 : s % 2 === 0 ? cFil2 : cFil1;
           galFieldCol.push(col.r, col.g, col.b);
-          galFieldScale.push(1.1);
-          galFieldAlpha.push(0.45);
+          galFieldScale.push(1.15);
+          galFieldAlpha.push(0.48);
           galFieldHigh.push(0);
         }
       }
@@ -1094,7 +1363,7 @@ export class UniverseScene {
     filGeo.setAttribute('position', new THREE.Float32BufferAttribute(filamentVerts, 3));
     this.cosmicWebLines = new THREE.LineSegments(
       filGeo,
-      new THREE.LineBasicMaterial({ color: '#6366f1', transparent: true, opacity: 0.22 })
+      new THREE.LineBasicMaterial({ color: '#38bdf8', transparent: true, opacity: 0.22 })
     );
     this.cosmicWebLines.frustumCulled = false;
     this.cosmicWebLines.visible = false;
@@ -1351,6 +1620,12 @@ export class UniverseScene {
     if (exoHz) exoHz.visible = this.layers.habitableZones;
     if (this.exoplanetPoints) this.exoplanetPoints.visible = this.layers.exoplanets;
     this.landmarkGroup.visible = this.layers.deepSpace;
+    if (this.dsoSimMesh) this.dsoSimMesh.visible = this.layers.deepSpace;
+    if (this.simGridMesh) this.simGridMesh.visible = this.layers.simGrid;
+    if (this.celestialGraticuleLines) this.celestialGraticuleLines.visible = this.layers.simGrid;
+    if (this.celestialEquatorLine) this.celestialEquatorLine.visible = this.layers.simGrid;
+    if (this.earthGeoWireMesh) this.earthGeoWireMesh.visible = this.layers.simGrid;
+    if (this.earthGeoRingLine) this.earthGeoRingLine.visible = this.layers.simGrid && this.layers.satellites;
     this.helicalGroup.visible = this.layers.helicalMotion;
     this.markerLayerEl.style.display = this.layers.labels ? 'block' : 'none';
   }
@@ -1471,11 +1746,41 @@ export class UniverseScene {
       this.matchedCounts.satellites = matchedSats;
     }
 
+    let matchedDeep = 0;
     for (const [id, mesh] of this.landmarkMeshes.entries()) {
       const obj = this.catalogById.get(id);
       if (!obj) continue;
-      mesh.userData.filterAllowed = f.deepSpaceCategory === 'ALL' || obj.category === f.deepSpaceCategory;
+      const ok = f.deepSpaceCategory === 'ALL' || obj.category === f.deepSpaceCategory;
+      if (ok) matchedDeep++;
+      mesh.userData.filterAllowed = ok;
     }
+
+    if (this.dsoSimMesh && this.dsoSimRecords.length > 0) {
+      const geo = this.dsoSimMesh.geometry as THREE.InstancedBufferGeometry;
+      const alphas = geo.getAttribute('aAlpha') as THREE.InstancedBufferAttribute;
+      const highlights = geo.getAttribute('aHighlight') as THREE.InstancedBufferAttribute;
+      const hasDeepFilter = f.deepSpaceCategory !== 'ALL';
+
+      for (let i = 0; i < this.dsoSimRecords.length; i++) {
+        const d = this.dsoSimRecords[i];
+        const ok = !hasDeepFilter || d.category === f.deepSpaceCategory;
+        if (ok) matchedDeep++;
+        const baseA = d.category === 'cosmic-structure' ? 0.36 : 0.88;
+        if (!hasDeepFilter) {
+          alphas.setX(i, baseA);
+          highlights.setX(i, 0.0);
+        } else if (f.actionMode === 'isolate') {
+          alphas.setX(i, ok ? 0.96 : 0.0);
+          highlights.setX(i, ok ? 1.0 : 0.0);
+        } else {
+          alphas.setX(i, ok ? 0.98 : 0.08);
+          highlights.setX(i, ok ? 1.0 : 0.0);
+        }
+      }
+      alphas.needsUpdate = true;
+      highlights.needsUpdate = true;
+    }
+    this.matchedCounts.deepSpace = matchedDeep;
   }
 
   public setOpticalMode(mode: OpticalMode) {
@@ -1719,6 +2024,21 @@ export class UniverseScene {
       }
     }
 
+    if (this.layers.deepSpace && this.dsoSimMesh && this.dsoSimMesh.visible && camRadius > 5_000) {
+      const geo = this.dsoSimMesh.geometry as THREE.InstancedBufferGeometry;
+      const alphaAttr = geo.getAttribute('aAlpha') as THREE.InstancedBufferAttribute;
+      for (let i = 0; i < this.dsoSimRecords.length; i++) {
+        if (alphaAttr.getX(i) < 0.05) continue;
+        const d = this.dsoSimRecords[i];
+        proj.set(
+          (d.posLy[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY,
+          (d.posLy[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY,
+          (d.posLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY
+        );
+        testScreenCandidate(proj, d.id, d.messier ? 3 : 1);
+      }
+    }
+
     if (this.starPoints) {
       const alphaAttr = this.starPoints.geometry.getAttribute('aAlpha') as THREE.BufferAttribute;
       for (let i = 0; i < this.stars.length; i++) {
@@ -1889,6 +2209,38 @@ export class UniverseScene {
     const camAu = camRadius / RENDER_UNITS_PER_AU;
     const uTimeVal = nowMs * 0.001;
 
+    // Astrometric Simulation Reference Grid, Celestial RA/Dec Graticule & GEO Belt LOD
+    const gridY = this.focusObjectId === 'earth' ? -Math.min(7.4, camRadius * 0.34) : 0;
+    if (this.simGridMesh) {
+      this.simGridMesh.visible = this.layers.simGrid;
+      if (this.layers.simGrid) {
+        const spanUnits = camRadius * 6.0;
+        this.simGridMesh.position.set(0, gridY, 0);
+        this.simGridMesh.scale.set(spanUnits, spanUnits, 1);
+        const gMat = this.simGridMesh.material as THREE.ShaderMaterial;
+        gMat.uniforms.uSpanLy.value = (0.5 * spanUnits) / RENDER_UNITS_PER_LY;
+      }
+    }
+    if (this.celestialGraticuleLines && this.celestialEquatorLine) {
+      const showGrat = this.layers.simGrid && camLy < 150_000;
+      this.celestialGraticuleLines.visible = showGrat;
+      this.celestialEquatorLine.visible = showGrat;
+      if (showGrat) {
+        this.celestialGraticuleLines.position.copy(this.camera.position);
+        this.celestialEquatorLine.position.copy(this.camera.position);
+      }
+    }
+    const nearEarthSimFade = THREE.MathUtils.clamp(1.0 - (camRadius - 140) / 900, 0.0, 1.0);
+    if (this.earthGeoWireMesh) {
+      this.earthGeoWireMesh.visible = this.layers.simGrid && nearEarthSimFade > 0.02;
+    }
+    if (this.earthGeoRingLine) {
+      this.earthGeoRingLine.visible =
+        this.layers.simGrid && this.layers.satellites && nearEarthSimFade > 0.02;
+      (this.earthGeoRingLine.material as THREE.LineDashedMaterial).opacity =
+        0.24 * nearEarthSimFade;
+    }
+
     // Scale-Aware Layer LOD (Keeps Earth Orbit crisp black velvet & fades in Galactic / Cosmic Web smoothly!)
     if (this.skyPanoramaMesh) {
       this.skyPanoramaMesh.position.copy(this.camera.position);
@@ -2023,6 +2375,13 @@ export class UniverseScene {
           (anchor[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY,
           (anchor[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY
         );
+        const bodyPos = this.livePositionsLy.get(bodyId);
+        const oMat = line.material as THREE.ShaderMaterial;
+        if (bodyPos && oMat.uniforms?.uBodyDir) {
+          oMat.uniforms.uBodyDir.value
+            .set(bodyPos[0] - anchor[0], bodyPos[1] - anchor[1], bodyPos[2] - anchor[2])
+            .normalize();
+        }
       }
       if (this.sunHabitableZoneMesh) {
         this.sunHabitableZoneMesh.position.set(
@@ -2039,7 +2398,20 @@ export class UniverseScene {
       (earthPosLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY
     );
 
-    // Update Deep-Space Landmarks with Scale Visibility & Zero Heap Allocations
+    // Update Instanced OpenNGC Galaxies/Nebulae + 2.5D Deep-Space Landmarks with Scale Visibility
+    if (this.dsoSimMesh) {
+      const hasDeepFilter = this.filters.deepSpaceCategory !== 'ALL';
+      const dsoFade = this.layers.deepSpace
+        ? hasDeepFilter
+          ? 1.0
+          : THREE.MathUtils.clamp((camAu - 0.08) / 1.8, 0.0, 1.0)
+        : 0.0;
+      this.dsoSimMesh.visible = dsoFade > 0.005;
+      if (this.dsoSimMesh.visible) {
+        (this.dsoSimMesh.material as THREE.ShaderMaterial).uniforms.uGlobalFade.value = dsoFade;
+      }
+    }
+
     if (this.layers.deepSpace) {
       const showDeep = camAu > 0.25 || this.selectedObjectId != null;
       this.landmarkGroup.visible = showDeep;
@@ -2148,6 +2520,43 @@ export class UniverseScene {
 
     const originPosLy = this.getLivePositionLy(this.routeOriginId);
     const targetPosLy = this.selectedObjectId ? this.getLivePositionLy(this.selectedObjectId) : null;
+
+    // Update 3D Scientific Target Lock-On Reticle & Reference Plane Elevation Drop-Stem
+    if (this.targetReticleMesh && this.targetDropLine) {
+      if (targetPosLy && this.selectedObjectId !== 'cmb-horizon') {
+        const tx = (targetPosLy[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY;
+        const ty = (targetPosLy[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY;
+        const tz = (targetPosLy[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY;
+        const dTargetCam = Math.hypot(
+          this.camera.position.x - tx,
+          this.camera.position.y - ty,
+          this.camera.position.z - tz
+        );
+        const retScale = Math.max(0.2, dTargetCam * 0.068);
+        this.targetReticleMesh.visible = true;
+        this.targetReticleMesh.position.set(tx, ty, tz);
+        this.targetReticleMesh.scale.setScalar(retScale);
+
+        const stemLen = Math.abs(ty - gridY);
+        if (this.layers.simGrid && stemLen > dTargetCam * 0.012 && dTargetCam < camRadius * 5.0) {
+          this.targetDropLine.visible = true;
+          const dAttr = this.targetDropLine.geometry.getAttribute('position') as THREE.BufferAttribute;
+          dAttr.setXYZ(0, tx, ty, tz);
+          dAttr.setXYZ(1, tx, gridY, tz);
+          dAttr.needsUpdate = true;
+          const dMat = this.targetDropLine.material as THREE.LineDashedMaterial;
+          dMat.dashSize = Math.max(0.15, stemLen * 0.045);
+          dMat.gapSize = Math.max(0.1, stemLen * 0.028);
+          this.targetDropLine.computeLineDistances();
+        } else {
+          this.targetDropLine.visible = false;
+        }
+      } else {
+        this.targetReticleMesh.visible = false;
+        this.targetDropLine.visible = false;
+      }
+    }
+
     if (this.routeLine) {
       if (targetPosLy && this.selectedObjectId !== this.routeOriginId) {
         this.routeLine.visible = true;
@@ -2299,12 +2708,48 @@ export class UniverseScene {
       }
     }
 
-    if (this.layers.deepSpace && this.deepSpace && camLy >= 0.4) {
+    if (this.layers.deepSpace && this.deepSpace && camLy >= 0.35) {
+      const catFilter = this.filters.deepSpaceCategory;
       for (const lm of this.deepSpace.landmarks) {
         if (lm.id === 'jwst' || lm.id === 'voyager-1') continue;
-        if (lm.distLy > camLy * 65 && camLy < 500) continue;
-        if (lm.distLy < camLy * 0.002 && camLy > 50_000_000) continue;
-        emitMarker(lm.id, lm.name, lm.color, lm.posLy);
+        if (catFilter !== 'ALL' && lm.category !== catFilter) continue;
+        if (lm.distLy > camLy * 65 && camLy < 500 && catFilter === 'ALL') continue;
+        if (lm.distLy < camLy * 0.002 && camLy > 50_000_000 && catFilter === 'ALL') continue;
+        const lmTag =
+          lm.category === 'galaxy'
+            ? 'GAL'
+            : lm.category === 'nebula'
+              ? 'NEB'
+              : lm.category === 'black-hole'
+                ? 'SMBH'
+                : '';
+        emitMarker(lm.id, lm.name, lm.color, lm.posLy, lmTag);
+      }
+
+      // Surface OpenNGC Nebulae & Star Clusters across Milky Way scales (or when filtered)
+      if (
+        (camLy >= 8 && camLy < 260_000) ||
+        catFilter === 'nebula' ||
+        catFilter === 'cluster'
+      ) {
+        for (const neb of this.labelNebulae) {
+          if (catFilter !== 'ALL' && neb.category !== catFilter) continue;
+          const shortName = neb.name.replace(/\s*\(.*?\)\s*/g, '').trim();
+          const tag = neb.messier || (neb.category === 'cluster' ? 'CL' : 'NEB');
+          emitMarker(neb.id, shortName, neb.color, neb.posLy, tag);
+          if (used >= MAX_DOM_MARKERS - 2) break;
+        }
+      }
+
+      // Surface OpenNGC 3D Galaxies across Local Group & Supercluster scales (or when filtered)
+      if (camLy >= 80_000 || catFilter === 'galaxy') {
+        for (const gal of this.labelGalaxies) {
+          if (catFilter !== 'ALL' && gal.category !== catFilter) continue;
+          const shortName = gal.name.replace(/\s*\(.*?\)\s*/g, '').trim();
+          const tag = gal.messier || gal.hubbleType || 'GAL';
+          emitMarker(gal.id, shortName, gal.color, gal.posLy, tag);
+          if (used >= MAX_DOM_MARKERS) break;
+        }
       }
     }
 

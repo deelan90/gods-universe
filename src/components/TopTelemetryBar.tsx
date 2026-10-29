@@ -35,6 +35,15 @@ interface Props {
   filters: UniverseFilters;
   onChangeFilters: (filters: UniverseFilters) => void;
   onResetFilters: () => void;
+  onJumpScale: (
+    preset:
+      | 'earth-orbit'
+      | 'solar-system'
+      | 'interstellar'
+      | 'milky-way'
+      | 'local-group'
+      | 'observable-universe'
+  ) => void;
 }
 
 export const TopTelemetryBar: React.FC<Props> = React.memo(
@@ -56,6 +65,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
     filters,
     onChangeFilters,
     onResetFilters,
+    onJumpScale,
   }) => {
     const [query, setQuery] = useState('');
     const [focused, setFocused] = useState(false);
@@ -85,7 +95,8 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
       filters.habitableOnly ||
       filters.recentDiscoveriesOnly ||
       filters.minEarthRadii > 0.1 ||
-      filters.maxEarthRadii < 25;
+      filters.maxEarthRadii < 25 ||
+      filters.deepSpaceCategory !== 'ALL';
 
     return (
       <header className="pointer-events-none fixed top-0 inset-x-0 z-30 p-2.5 sm:p-3.5 flex flex-col gap-2">
@@ -120,9 +131,15 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                 {telemetry?.scaleLabel || 'EARTH ORBIT // LEO–GEO'}
               </div>
               {telemetry && (
-                <span className="font-mono text-[11px] text-slate-400">
-                  {telemetry.cameraSpanLabel}
-                </span>
+                <>
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {telemetry.cameraSpanLabel}
+                  </span>
+                  <span className="text-white/15">|</span>
+                  <span className="font-mono text-[10px] text-emerald-400">
+                    {telemetry.fps} FPS
+                  </span>
+                </>
               )}
             </div>
           </div>
@@ -138,7 +155,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                 onFocus={() => setFocused(true)}
                 onBlur={() => setTimeout(() => setFocused(false), 180)}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search Earth, TRAPPIST-1e, ISS, Andromeda, Orion, Sirius..."
+                placeholder="Search Bode's Galaxy, Rosette, Horsehead, M81, TRAPPIST-1e, ISS..."
                 className="w-full pl-9 pr-8 py-2 rounded-xl glass-pill focus:border-cyan-400/75 focus:outline-none text-xs sm:text-sm text-white placeholder:text-slate-400/80 transition"
               />
               {query && (
@@ -242,7 +259,62 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
 
         {/* Sleek Floating Quick-Filter Chips (Hidden when Left Drawer is open to keep view airy) */}
         {!showLeftPanel && (
-          <div className="pointer-events-auto hidden md:flex items-center gap-1.5 self-start">
+          <div className="pointer-events-auto hidden md:flex flex-wrap items-center gap-1.5 self-start">
+            <button
+              onClick={() => onChangeLayers({ ...layers, simGrid: !layers.simGrid })}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
+                layers.simGrid
+                  ? 'bg-cyan-500/20 border border-cyan-400/55 text-cyan-200 backdrop-blur-md'
+                  : 'glass-pill text-slate-400 hover:text-white'
+              }`}
+              title="Toggle Logarithmic Astrometric Range Grid & Celestial Coordinates"
+            >
+              Sim Grid
+            </button>
+            <button
+              onClick={() => {
+                const active = filters.deepSpaceCategory === 'nebula';
+                if (active) {
+                  onResetFilters();
+                } else {
+                  onChangeFilters({
+                    ...filters,
+                    actionMode: 'isolate',
+                    deepSpaceCategory: 'nebula',
+                  });
+                  onJumpScale('milky-way');
+                }
+              }}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+                filters.deepSpaceCategory === 'nebula'
+                  ? 'bg-rose-500/25 border border-rose-400/60 text-rose-200 backdrop-blur-md'
+                  : 'glass-pill text-slate-400 hover:text-white'
+              }`}
+            >
+              Nebulae (430+)
+            </button>
+            <button
+              onClick={() => {
+                const active = filters.deepSpaceCategory === 'galaxy';
+                if (active) {
+                  onResetFilters();
+                } else {
+                  onChangeFilters({
+                    ...filters,
+                    actionMode: 'isolate',
+                    deepSpaceCategory: 'galaxy',
+                  });
+                  onJumpScale('local-group');
+                }
+              }}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+                filters.deepSpaceCategory === 'galaxy'
+                  ? 'bg-indigo-500/25 border border-indigo-400/60 text-indigo-200 backdrop-blur-md'
+                  : 'glass-pill text-slate-400 hover:text-white'
+              }`}
+            >
+              Galaxies (1,850+)
+            </button>
             <button
               onClick={() =>
                 onChangeLayers({ ...layers, constellations: !layers.constellations })

@@ -407,19 +407,42 @@ export function buildUnifiedCatalog(params: {
     });
   }
 
-  // 2. Deep-Space Landmarks & Catalog DSOs
+  // 2. Deep-Space Landmarks & 2,600+ OpenNGC Galaxies, Nebulae & Star Clusters
   for (const d of [...params.deepSpace.landmarks, ...params.deepSpace.catalogDsos]) {
     const cleanName = d.name.replace(/\s*\(.*?\)\s*/g, '').trim();
+    const wikiTitle = /^M\d+$/i.test(cleanName)
+      ? `Messier_${cleanName.slice(1)}`
+      : /^(NGC|IC)\s+\d+/i.test(cleanName)
+        ? cleanName.replace(/\s+/g, '_')
+        : cleanName;
+
+    const distFmt = formatCosmicDistance(d.distLy);
+    const sizeStr =
+      d.sizeLy >= 1000
+        ? `~${Math.round(d.sizeLy).toLocaleString()} light-years across`
+        : `~${d.sizeLy} light-years in physical diameter`;
+
+    const synthesizedFacts =
+      d.funFacts && d.funFacts.length > 0
+        ? d.funFacts
+        : [
+            `${d.subType} cataloged in the OpenNGC / Messier survey${d.constellation ? ` toward constellation ${d.constellation}` : ''} at a 3D distance of ${distFmt.primary} (${distFmt.secondary}).`,
+            `Spans ${sizeStr}${d.mag !== undefined ? ` with apparent visual magnitude V ≈ ${d.mag}` : ''} at J2000 coordinates RA ${d.raDeg.toFixed(2)}°, Dec ${d.decDeg >= 0 ? '+' : ''}${d.decDeg.toFixed(2)}°.`,
+            d.category === 'galaxy'
+              ? `Starlight arriving at Earth's telescopes today left this island universe ${(d.distLy / 1e6).toFixed(2)} million years ago—mapped in 3D comoving space via Hubble-flow redshift!`
+              : `Mapped inside our Milky Way's 3D stellar disk—orbit around or fly directly into its glowing gas shell to inspect its scale relative to nearby stars!`,
+          ];
+
     register({
       id: d.id,
       name: d.name,
-      subtitle: `${d.subType} • ${formatCosmicDistance(d.distLy).primary}`,
+      subtitle: `${d.subType}${d.constellation ? ` • ${d.constellation}` : ''} • ${distFmt.primary}`,
       category: d.category,
       color: d.color,
       raDeg: d.raDeg,
       decDeg: d.decDeg,
-      wikiTitle: cleanName,
-      nasaQuery: cleanName,
+      wikiTitle,
+      nasaQuery: d.nasaQuery || cleanName,
       fallbackQuery:
         d.category === 'galaxy'
           ? 'Spiral galaxy'
@@ -432,7 +455,7 @@ export function buildUnifiedCatalog(params: {
                 : 'Hubble nebula',
       heroImage: d.heroImage,
       renderAs25D: d.renderAs25D,
-      funFacts: d.funFacts,
+      funFacts: synthesizedFacts,
       basePosLy: d.posLy,
       raw: d,
     });

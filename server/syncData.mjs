@@ -455,85 +455,506 @@ async function syncSatellites() {
 }
 
 /**
- * 4. Sync Deep-Sky Objects (Messier / Bright NGC + Curated Landmarks)
+ * Parse sexagesimal Right Ascension (HH:MM:SS.s) -> degrees [0, 360)
+ */
+function parseSexagesimalRaDeg(raStr) {
+  if (!raStr) return null;
+  const parts = raStr.trim().split(':').map(Number);
+  if (parts.length < 2 || parts.some((n) => Number.isNaN(n))) return null;
+  const hours = parts[0] + (parts[1] || 0) / 60 + (parts[2] || 0) / 3600;
+  return ((hours * 15) % 360 + 360) % 360;
+}
+
+/**
+ * Parse sexagesimal Declination (±DD:MM:SS.s) -> degrees [-90, +90]
+ */
+function parseSexagesimalDecDeg(decStr) {
+  if (!decStr) return null;
+  const s = decStr.trim();
+  const sign = s.startsWith('-') ? -1 : 1;
+  const clean = s.replace(/^[+-]/, '');
+  const parts = clean.split(':').map(Number);
+  if (parts.length < 2 || parts.some((n) => Number.isNaN(n))) return null;
+  const deg = parts[0] + (parts[1] || 0) / 60 + (parts[2] || 0) / 3600;
+  return sign * deg;
+}
+
+function formatOpenNgcCatalogCode(rawCode) {
+  const m = rawCode.match(/^([A-Za-z]+)0*(\d+[A-Za-z]?)$/);
+  if (!m) return rawCode;
+  return `${m[1]} ${m[2]}`;
+}
+
+/**
+ * Exact astrophysically measured TRGB / Cepheid / Maser / Gaia distances (in Light-Years)
+ * for famous Messier, Caldwell, Local Group & Milky Way deep-sky landmarks
+ */
+const KNOWN_DSO_DIST_LY = {
+  // Milky Way & Magellanic Nebulae
+  B033: 1375, // Horsehead Nebula
+  NGC2024: 1350, // Flame Nebula
+  NGC1977: 1500, // Running Man Nebula
+  NGC2068: 1350, // M78 Reflection Nebula
+  NGC2237: 5200, // Rosette Nebula
+  NGC2238: 5200,
+  NGC2239: 5200,
+  NGC2244: 5200, // Rosette Cluster
+  NGC2246: 5200,
+  NGC2264: 2300, // Cone Nebula / Christmas Tree Cluster
+  NGC6523: 4100, // M8 Lagoon Nebula
+  NGC6514: 4100, // M20 Trifid Nebula
+  NGC6618: 5500, // M17 Omega / Swan Nebula
+  NGC6853: 1360, // M27 Dumbbell Nebula
+  NGC3587: 2030, // M97 Owl Nebula
+  NGC0650: 2500, // M76 Little Dumbbell Nebula
+  NGC7000: 2590, // North America Nebula
+  IC5070: 2590, // Pelican Nebula
+  NGC6960: 2400, // Western Veil Nebula (Witch's Broom)
+  NGC6992: 2400, // Eastern Veil Nebula
+  NGC6995: 2400, // Network Nebula (Cygnus Loop)
+  NGC6888: 5000, // Crescent Nebula
+  NGC7635: 7100, // Bubble Nebula
+  NGC6543: 3300, // Cat's Eye Nebula
+  NGC2392: 4200, // Eskimo Nebula
+  NGC6302: 3400, // Butterfly / Bug Nebula
+  NGC7009: 3900, // Saturn Nebula
+  NGC3242: 4300, // Ghost of Jupiter Nebula
+  NGC2440: 4000,
+  NGC6826: 5200, // Blinking Planetary
+  NGC1499: 1000, // California Nebula
+  IC1805: 7500, // Heart Nebula
+  IC1848: 7500, // Soul Nebula
+  IC2118: 900, // Witch Head Nebula
+  IC1396: 2400, // Elephant's Trunk Nebula
+  NGC6334: 5500, // Cat's Paw Nebula
+  NGC6357: 5500, // Lobster Nebula
+  NGC2359: 11900, // Thor's Helmet
+  NGC2070: 160000, // Tarantula Nebula (30 Doradus in LMC)
+  NGC0346: 200000, // SMC Star-Forming HII Region
+  // Star Clusters
+  Mel022: 444, // M45 Pleiades
+  Mel025: 153, // Hyades
+  NGC2632: 577, // M44 Beehive Cluster
+  NGC0869: 7500, // h Persei (Double Cluster)
+  NGC0884: 7500, // Chi Persei (Double Cluster)
+  NGC6205: 22200, // M13 Great Hercules Globular Cluster
+  NGC7078: 33600, // M15
+  NGC7089: 37500, // M2
+  NGC5272: 33900, // M3
+  NGC6121: 7200, // M4
+  NGC5904: 24500, // M5
+  NGC6341: 26700, // M92
+  NGC5139: 17090, // Omega Centauri
+  NGC0104: 14500, // 47 Tucanae
+  NGC4755: 6440, // Jewel Box Cluster
+  // Local Group, Messier & Benchmark Galaxies
+  NGC0292: 200000, // Small Magellanic Cloud (SMC)
+  NGC6822: 1630000, // Barnard's Galaxy
+  IC0010: 2200000, // IC 10 Starburst Galaxy
+  IC1613: 2380000,
+  NGC0147: 2530000,
+  NGC0185: 2050000,
+  NGC0205: 2690000, // M110
+  NGC0221: 2490000, // M32
+  NGC0300: 6070000,
+  NGC0055: 6500000,
+  NGC0253: 11400000, // Sculptor Galaxy
+  NGC0247: 11100000,
+  NGC2403: 10400000,
+  NGC3031: 11800000, // M81 Bode's Galaxy
+  NGC3034: 12000000, // M82 Cigar Galaxy
+  NGC5236: 15200000, // M83 Southern Pinwheel Galaxy
+  NGC4945: 11700000,
+  NGC4736: 16000000, // M94
+  NGC4826: 17300000, // M64 Black Eye Galaxy
+  NGC5457: 20900000, // M101 Pinwheel Galaxy
+  NGC4258: 23700000, // M106
+  NGC5055: 29300000, // M63 Sunflower Galaxy
+  NGC4631: 25000000, // Whale Galaxy
+  NGC4565: 42700000, // Needle Galaxy
+  NGC0628: 32000000, // M74 Phantom Galaxy
+  NGC3351: 33000000, // M95
+  NGC3368: 33500000, // M96
+  NGC3379: 34000000, // M105
+  NGC3623: 35000000, // M65 (Leo Triplet)
+  NGC3627: 35500000, // M66 (Leo Triplet)
+  NGC3628: 35200000, // Hamburger Galaxy (Leo Triplet)
+  NGC5866: 44000000, // M102 Spindle Galaxy
+  NGC4038: 45000000, // Antennae Galaxies
+  NGC4039: 45000000,
+  NGC1300: 61300000, // Grand-Design Barred Spiral
+  NGC1365: 56000000, // Great Barred Spiral in Fornax
+  NGC1068: 47000000, // M77 Cetus A Seyfert Galaxy
+  // Virgo Cluster Messier Galaxies (~52–57 Mly core)
+  NGC4192: 51000000, // M98
+  NGC4254: 52000000, // M99
+  NGC4321: 55000000, // M100
+  NGC4374: 55000000, // M84
+  NGC4382: 56000000, // M85
+  NGC4406: 52000000, // M86
+  NGC4472: 53000000, // M49
+  NGC4501: 54500000, // M88
+  NGC4548: 54000000, // M91
+  NGC4552: 53500000, // M89
+  NGC4569: 54800000, // M90
+  NGC4579: 56500000, // M58
+  NGC4621: 53800000, // M59
+  NGC4649: 55200000, // M60
+  NGC4762: 56000000,
+};
+
+const CANONICAL_DSO_NAMES = {
+  NGC5457: 'Pinwheel Galaxy',
+  NGC6618: 'Omega Nebula',
+  NGC0650: 'Little Dumbbell Nebula',
+  IC1805: 'Heart Nebula',
+  IC1848: 'Soul Nebula',
+  NGC2237: 'Rosette Nebula',
+  NGC2070: 'Tarantula Nebula',
+  NGC5139: 'Omega Centauri',
+  NGC0104: '47 Tucanae',
+  NGC0253: 'Sculptor Galaxy',
+  NGC4038: 'Antennae Galaxies',
+  NGC7635: 'Bubble Nebula',
+  NGC1499: 'California Nebula',
+  IC1396: "Elephant's Trunk Nebula",
+  NGC2264: 'Cone Nebula',
+  NGC6302: 'Butterfly Nebula',
+  NGC6888: 'Crescent Nebula',
+  NGC2359: "Thor's Helmet Nebula",
+  NGC0628: 'Phantom Galaxy',
+  NGC2024: 'Flame Nebula',
+  IC5070: 'Pelican Nebula',
+  NGC7000: 'North America Nebula',
+  B033: 'Horsehead Nebula',
+  NGC6543: "Cat's Eye Nebula",
+  NGC6960: 'Western Veil Nebula',
+  NGC6992: 'Eastern Veil Nebula',
+};
+
+// Catalog codes already represented with bespoke 2.5D JWST/Hubble/EHT hero cards in CURATED_COSMIC_LANDMARKS
+const CURATED_SKIP_CODES = new Set([
+  'NGC1952', // M1 Crab Nebula
+  'NGC6611', // M16 Eagle / Pillars of Creation
+  'NGC0224', // M31 Andromeda Galaxy
+  'NGC0598', // M33 Triangulum Galaxy
+  'NGC1976', // M42 Orion Nebula
+  'NGC5194', // M51 Whirlpool Galaxy
+  'NGC5195', // M51b companion
+  'NGC6720', // M57 Ring Nebula
+  'NGC4486', // M87 / M87*
+  'NGC4594', // M104 Sombrero Galaxy
+  'NGC7293', // Helix Nebula
+  'NGC3372', // Carina Nebula
+  'NGC3324', // Cosmic Cliffs (Carina)
+  'NGC3132', // Southern Ring Nebula
+  'NGC5128', // Centaurus A
+  'NGC7317', // Stephan's Quintet
+  'NGC7318A',
+  'NGC7318B',
+  'NGC7319',
+  'NGC7320',
+]);
+
+/**
+ * 4. Sync Deep-Sky Objects from Official OpenNGC Database (NGC + IC + Messier + Caldwell) + Curated Landmarks
  */
 export async function syncDeepSpace() {
-  console.log('[Sync] Building Deep-Space Nebulae, Black Holes, Galaxies & Observable Universe Landmarks...');
+  console.log('[Sync] Building Deep-Space Galaxies, Nebulae, Star Clusters & Landmarks from OpenNGC...');
   const landmarks = CURATED_COSMIC_LANDMARKS.map((item) => ({
     ...item,
+    morphCode:
+      item.category === 'galaxy'
+        ? item.subType.toLowerCase().includes('barred')
+          ? 1
+          : item.subType.toLowerCase().includes('elliptical') || item.subType.toLowerCase().includes('lenticular')
+            ? 2
+            : 0
+        : item.category === 'nebula'
+          ? item.subType.toLowerCase().includes('planetary') || item.subType.toLowerCase().includes('supernova')
+            ? 4
+            : 3
+          : item.category === 'cluster'
+            ? 5
+            : 2,
+    axisRatio: 0.72,
+    posAngleDeg: 28,
     posLy: item.distLy > 0 ? raDecDistToThreeLy(item.raDeg, item.decDeg, item.distLy) : [0, 0, 0],
   }));
 
-  // Also pull bright Messier / NGC objects from d3-celestial for comprehensive sky coverage
-  const extraDsos = [];
+  const nebulaCandidates = [];
+  const clusterCandidates = [];
+  const galaxyCandidates = [];
+
   try {
-    const res = await fetchWithTimeout(
-      'https://raw.githubusercontent.com/ofrohn/d3-celestial/master/data/dsos.bright.json',
-      20000
-    );
-    const geo = await res.json();
-    const curatedNames = new Set(landmarks.map((l) => l.name.toLowerCase()));
+    const [ngcRes, addRes] = await Promise.all([
+      fetchWithTimeout('https://raw.githubusercontent.com/mattiaverga/OpenNGC/master/database_files/NGC.csv', 40000),
+      fetchWithTimeout('https://raw.githubusercontent.com/mattiaverga/OpenNGC/master/database_files/addendum.csv', 25000),
+    ]);
+    const [ngcCsv, addCsv] = await Promise.all([ngcRes.text(), addRes.text()]);
 
-    for (const feat of geo.features || []) {
-      const props = feat.properties || {};
-      const coords = feat.geometry?.coordinates;
-      if (!coords || coords.length < 2) continue;
-      const name = props.name || props.desig;
-      if (!name) continue;
-      if ([...curatedNames].some((cn) => cn.includes(name.toLowerCase()))) continue;
+    const allLines = [
+      ...ngcCsv.split(/\r?\n/).slice(1),
+      ...addCsv.split(/\r?\n/).slice(1),
+    ];
 
-      const raDeg = ((coords[0] % 360) + 360) % 360;
-      const decDeg = coords[1];
-      const dsoType = props.type || 'oc';
+    const seenCodes = new Set();
 
-      // Realistic typical distance by DSO morphological class when catalog only stores angular mag
-      let estDistLy = 3800;
-      let category = 'cluster';
-      let subType = 'Star Cluster';
-      if (dsoType === 'g' || dsoType === 's') {
-        estDistLy = 18000000 + ((Math.abs(Math.sin(raDeg)) * 45000000) | 0);
-        category = 'galaxy';
-        subType = 'Spiral / Elliptical Galaxy';
-      } else if (dsoType === 'gc') {
-        estDistLy = 16000 + ((Math.abs(Math.cos(raDeg)) * 28000) | 0);
-        category = 'cluster';
-        subType = 'Globular Star Cluster';
-      } else if (dsoType === 'pn' || dsoType === 'en' || dsoType === 'rn' || dsoType === 'snr') {
-        estDistLy = 1800 + ((Math.abs(Math.sin(decDeg)) * 5500) | 0);
-        category = 'nebula';
-        subType = dsoType === 'pn' ? 'Planetary Nebula' : dsoType === 'snr' ? 'Supernova Remnant' : 'Emission Nebula';
+    for (const line of allLines) {
+      if (!line || line.length < 10) continue;
+      const cols = line.split(';');
+      const rawCode = (cols[0] || '').trim();
+      const objType = (cols[1] || '').trim();
+      if (!rawCode || !objType) continue;
+      if (['Dup', 'NonEx', '*', '**', 'Other'].includes(objType)) continue;
+      if (CURATED_SKIP_CODES.has(rawCode) || seenCodes.has(rawCode)) continue;
+
+      const raDeg = parseSexagesimalRaDeg(cols[2]);
+      const decDeg = parseSexagesimalDecDeg(cols[3]);
+      if (raDeg === null || decDeg === null) continue;
+
+      seenCodes.add(rawCode);
+
+      const constellation = (cols[4] || '').trim() || null;
+      const majAxArcmin = parseFloat(cols[5]);
+      const minAxArcmin = parseFloat(cols[6]);
+      const posAngleDeg = Number.isFinite(parseFloat(cols[7])) ? Math.round(parseFloat(cols[7])) : Math.round((raDeg * 3.7) % 180);
+      const bMag = parseFloat(cols[8]);
+      const vMag = parseFloat(cols[9]);
+      const mag = Number.isFinite(vMag) ? vMag : Number.isFinite(bMag) ? bMag - 0.5 : 11.8;
+      const hubbleType = (cols[14] || '').trim();
+      const paxMas = parseFloat(cols[15]);
+      const radVelKms = parseFloat(cols[18]);
+      const redshift = parseFloat(cols[19]);
+      const messierRaw = (cols[23] || '').trim();
+      const messierNum = messierRaw ? parseInt(messierRaw, 10) : null;
+      const messier = messierNum && Number.isFinite(messierNum) ? `M${messierNum}` : null;
+      const commonNamesRaw = (cols[28] || '').trim();
+      const primaryCommon =
+        CANONICAL_DSO_NAMES[rawCode] || (commonNamesRaw ? commonNamesRaw.split(',')[0].trim() : '');
+
+      const formattedCatalog = formatOpenNgcCatalogCode(rawCode);
+      let displayName = formattedCatalog;
+      if (primaryCommon && messier) {
+        displayName = `${primaryCommon} (${messier})`;
+      } else if (primaryCommon) {
+        displayName = `${primaryCommon} (${formattedCatalog})`;
+      } else if (messier) {
+        displayName = `${messier} (${formattedCatalog})`;
       }
 
-      extraDsos.push({
-        id: `dso-${(props.desig || name).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-        name: props.name && props.desig && props.name !== props.desig ? `${props.name} (${props.desig})` : name,
+      const axisRatio =
+        Number.isFinite(majAxArcmin) && majAxArcmin > 0 && Number.isFinite(minAxArcmin) && minAxArcmin > 0
+          ? round(Math.max(0.18, Math.min(1.0, minAxArcmin / majAxArcmin)), 2)
+          : 0.72;
+
+      let category = 'galaxy';
+      let subType = 'Spiral Galaxy';
+      let morphCode = 0;
+      let color = '#93c5fd';
+      let distLy = KNOWN_DSO_DIST_LY[rawCode] || null;
+
+      const isGalaxy = ['G', 'GPair', 'GTrpl', 'GGroup'].includes(objType);
+      const isNebula = ['PN', 'HII', 'EmN', 'Neb', 'Cl+N', 'RfN', 'DrkN', 'SNR'].includes(objType);
+
+      // Deterministic pseudo-scatter in [0, 1) from sky coordinates so fallback distances never form artificial shells
+      const skyHash = Math.abs(Math.sin(raDeg * 12.9898 + decDeg * 78.233) * 43758.5453) % 1;
+
+      if (isGalaxy) {
+        category = 'galaxy';
+        const hUp = hubbleType.toUpperCase();
+        if (hUp.startsWith('SB') || hUp.startsWith('SAB')) {
+          morphCode = 1; // Barred Spiral
+          subType = `Barred Spiral Galaxy${hubbleType ? ` (${hubbleType})` : ''}`;
+          color = '#7dd3fc';
+        } else if (hUp.startsWith('E') || hUp.startsWith('S0')) {
+          morphCode = 2; // Elliptical / Lenticular
+          subType = hUp.startsWith('S0')
+            ? `Lenticular Galaxy (${hubbleType})`
+            : `Elliptical Galaxy${hubbleType ? ` (${hubbleType})` : ''}`;
+          color = '#fcd34d';
+        } else if (hUp.startsWith('I')) {
+          morphCode = 0;
+          subType = `Irregular Galaxy (${hubbleType})`;
+          color = '#a5b4fc';
+        } else {
+          morphCode = 0; // Grand-design / Flocculent Spiral
+          subType =
+            objType === 'GPair'
+              ? 'Interacting Galaxy Pair'
+              : objType === 'GTrpl' || objType === 'GGroup'
+                ? 'Compact Galaxy Group'
+                : `Spiral Galaxy${hubbleType ? ` (${hubbleType})` : ''}`;
+          color = skyHash > 0.45 ? '#60a5fa' : '#c4b5fd';
+        }
+
+        if (!distLy) {
+          let z = Number.isFinite(redshift) ? redshift : Number.isFinite(radVelKms) ? radVelKms / 299792.458 : null;
+          const inVirgoCore = raDeg >= 178 && raDeg <= 195 && decDeg >= 2 && decDeg <= 21;
+          if (z !== null && z > 0.0012) {
+            // Hubble-Lemaitre relativistic comoving distance (H0 = 69.8 km/s/Mpc)
+            const dMpc = ((299792.458 * z) / 69.8) * (1 + 0.225 * z);
+            distLy = Math.round(dMpc * 3_261_563.78);
+            // Clamp Virgo infall peculiar velocities to realistic Virgo supercluster depth
+            if (inVirgoCore && distLy < 85_000_000) {
+              distLy = Math.round(49_000_000 + skyHash * 11_000_000);
+            }
+          } else if (inVirgoCore) {
+            distLy = Math.round(50_500_000 + skyHash * 8_500_000);
+          } else {
+            // Tully-Fisher / Faber-Jackson apparent magnitude fallback (m - M) with M_V ~ -20.6
+            const clampedMag = Math.max(8.2, Math.min(14.5, mag));
+            const estMpc = Math.pow(10, (clampedMag + 20.6 - 25) / 5);
+            distLy = Math.round(Math.max(9_000_000, Math.min(450_000_000, estMpc * 3_261_563.78 * (0.85 + 0.3 * skyHash))));
+          }
+        }
+      } else if (isNebula) {
+        category = 'nebula';
+        if (objType === 'PN') {
+          morphCode = 4;
+          subType = 'Planetary Nebula';
+          color = '#2dd4bf';
+        } else if (objType === 'SNR') {
+          morphCode = 4;
+          subType = 'Supernova Remnant';
+          color = '#38bdf8';
+        } else if (objType === 'RfN') {
+          morphCode = 3;
+          subType = 'Reflection Nebula';
+          color = '#60a5fa';
+        } else if (objType === 'DrkN') {
+          morphCode = 3;
+          subType = 'Dark Molecular Nebula';
+          color = '#fb7185';
+        } else if (objType === 'Cl+N') {
+          morphCode = 3;
+          subType = 'Star-Forming Nebula & Cluster';
+          color = '#f472b6';
+        } else {
+          morphCode = 3;
+          subType = 'HII Emission Nebula';
+          color = '#f43f5e';
+        }
+
+        if (!distLy) {
+          if (Number.isFinite(paxMas) && paxMas > 0.08 && paxMas < 25) {
+            distLy = Math.round((1000 / paxMas) * PC_TO_LY);
+          } else {
+            // Typical physical size scaling inside Milky Way disk (PN ~1.2 ly, HII/Neb ~18 ly, SNR ~35 ly)
+            const typPhysLy = objType === 'PN' ? 1.15 : objType === 'SNR' ? 32 : 16;
+            const angRad = Math.max(0.25, Number.isFinite(majAxArcmin) ? majAxArcmin : 3.5) * (Math.PI / (180 * 60));
+            const rawEst = typPhysLy / Math.tan(angRad);
+            distLy = Math.round(Math.max(420, Math.min(28_000, rawEst * (0.75 + 0.5 * skyHash))));
+          }
+        }
+      } else {
+        // GCl, OCl, *Ass
+        category = 'cluster';
+        morphCode = 5;
+        if (objType === 'GCl') {
+          subType = 'Globular Star Cluster';
+          color = '#fcd34d';
+        } else if (objType === '*Ass') {
+          subType = 'OB Stellar Association';
+          color = '#93c5fd';
+        } else {
+          subType = 'Open Star Cluster';
+          color = '#fde68a';
+        }
+
+        if (!distLy) {
+          if (Number.isFinite(paxMas) && paxMas > 0.06 && paxMas < 30) {
+            distLy = Math.round((1000 / paxMas) * PC_TO_LY);
+          } else if (objType === 'GCl') {
+            distLy = Math.round(14_000 + skyHash * 38_000);
+          } else {
+            distLy = Math.round(950 + skyHash * 7_500);
+          }
+        }
+      }
+
+      // Compute true physical diameter in Light-Years from angular MajAx (arcmin) & 3D distance
+      let sizeLy;
+      if (Number.isFinite(majAxArcmin) && majAxArcmin > 0) {
+        const angRad = (majAxArcmin / 60) * DEG_TO_RAD;
+        sizeLy = distLy * Math.tan(angRad);
+      } else {
+        sizeLy = category === 'galaxy' ? 65_000 : category === 'cluster' ? 45 : 14;
+      }
+
+      if (category === 'galaxy') {
+        sizeLy = Math.max(8_000, Math.min(380_000, Math.round(sizeLy)));
+      } else if (category === 'cluster') {
+        sizeLy = round(Math.max(6, Math.min(320, sizeLy)), 1);
+      } else {
+        sizeLy = round(Math.max(0.8, Math.min(450, sizeLy)), 2);
+      }
+
+      // Priority ranking so all Messiers, named highlights & brightest deep-sky objects are always retained
+      const priorityScore =
+        (primaryCommon ? 1000 : 0) +
+        (messier ? 800 : 0) +
+        (KNOWN_DSO_DIST_LY[rawCode] ? 500 : 0) +
+        (20 - Math.min(20, mag)) * 18 +
+        (Number.isFinite(majAxArcmin) ? Math.min(60, majAxArcmin) * 1.5 : 0);
+
+      const record = {
+        id: `dso-${rawCode.toLowerCase()}`,
+        name: displayName,
         category,
         subType,
-        raDeg: round(raDeg, 3),
-        decDeg: round(decDeg, 3),
-        distLy: estDistLy,
-        posLy: raDecDistToThreeLy(raDeg, decDeg, estDistLy),
-        mag: props.mag ?? 7.5,
-        sizeLy: category === 'galaxy' ? 65000 : category === 'cluster' ? 95 : 14,
-        color: category === 'galaxy' ? '#c4b5fd' : category === 'nebula' ? '#38bdf8' : '#fde68a',
-        nasaQuery: `${props.name || props.desig}`,
+        raDeg: round(raDeg, 4),
+        decDeg: round(decDeg, 4),
+        distLy,
+        posLy: raDecDistToThreeLy(raDeg, decDeg, distLy),
+        sizeLy,
+        mag: round(mag, 2),
+        color,
+        morphCode,
+        hubbleType: hubbleType || undefined,
+        axisRatio,
+        posAngleDeg,
+        messier,
+        constellation,
+        nasaQuery: primaryCommon || messier || formattedCatalog,
         heroImage: null,
         renderAs25D: false,
-        funFacts: [
-          `${subType} cataloged as ${props.desig || name} at Right Ascension ${round(raDeg, 2)}°, Declination ${round(decDeg, 2)}°.`,
-          `Apparent visual magnitude ${props.mag ?? '—'}, observable in deep-sky surveys from Earth’s hemisphere.`,
-        ],
-      });
+        funFacts: [],
+        _score: priorityScore,
+      };
+
+      if (isNebula) nebulaCandidates.push(record);
+      else if (isGalaxy) galaxyCandidates.push(record);
+      else clusterCandidates.push(record);
     }
   } catch (err) {
-    console.warn(`[Sync] Warning fetching bright DSOs: ${err.message}`);
+    console.warn(`[Sync] Warning fetching OpenNGC catalog: ${err.message}`);
   }
+
+  nebulaCandidates.sort((a, b) => b._score - a._score);
+  clusterCandidates.sort((a, b) => b._score - a._score);
+  galaxyCandidates.sort((a, b) => b._score - a._score);
+
+  const selectedDsos = [
+    ...nebulaCandidates, // Keep ALL ~425 real OpenNGC nebulae!
+    ...clusterCandidates.slice(0, 350), // Top 350 globular & open star clusters
+    ...galaxyCandidates.slice(0, 1850), // Top 1,850 redshift-mapped 3D galaxies
+  ].map(({ _score, ...clean }) => clean);
+
+  console.log(
+    `[Sync] OpenNGC 3D Deep-Space Catalog built: ${nebulaCandidates.length} Nebulae, ${Math.min(
+      350,
+      clusterCandidates.length
+    )} Star Clusters, ${Math.min(1850, galaxyCandidates.length)} 3D Galaxies (${
+      landmarks.length + selectedDsos.length
+    } total deep-space objects).`
+  );
 
   return {
     solarSystem: SOLAR_SYSTEM_BODIES,
     zodiacSigns: ZODIAC_STAR_SIGNS,
     landmarks,
-    catalogDsos: extraDsos.slice(0, 140),
+    catalogDsos: selectedDsos,
   };
 }
 

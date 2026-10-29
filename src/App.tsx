@@ -36,6 +36,7 @@ const DEFAULT_LAYERS: LayerVisibility = {
   exoplanets: true,
   deepSpace: true,
   cosmicWeb: true,
+  simGrid: true,
   labels: true,
   helicalMotion: false,
   trueScaleBodies: false,
@@ -353,6 +354,7 @@ export const App: React.FC = () => {
         filters={filters}
         onChangeFilters={handleChangeFilters}
         onResetFilters={handleResetFilters}
+        onJumpScale={handleJumpScale}
       />
 
       {/* Left Dock: Layers & Multi-Metric Celestial Filters */}
@@ -451,7 +453,7 @@ export const App: React.FC = () => {
             God&apos;s Universe
           </div>
           <p className="text-xs text-slate-400 font-mono">
-            Streaming NASA Exoplanets • HYG 3D Stars • NORAD Satellites • Deep-Sky Surveys
+            Streaming 6,400+ Exoplanets • 8,900+ 3D Stars • 2,650+ OpenNGC Galaxies &amp; Nebulae
           </p>
         </div>
       )}

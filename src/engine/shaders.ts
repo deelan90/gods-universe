@@ -7,6 +7,9 @@ const GLSL_SAFE_MATH = /* glsl */ `
   float safePow(float base, float expVal) {
     return pow(max(base, 1e-4), expVal);
   }
+  float safeAtan(float y, float x) {
+    return (abs(x) + abs(y) < 1e-6) ? 0.0 : atan(y, x);
+  }
 `;
 
 /**
@@ -731,6 +734,494 @@ export function createPlanetaryRingMaterial(colorHex: string, isSaturn: boolean)
           float edgeFade = smoothstep(0.0, 0.1, t) * smoothstep(1.0, 0.9, t);
           gl_FragColor = vec4(uColor, edgeFade * ringlets * 0.35);
         }
+      }
+    `,
+  });
+}
+
+/**
+ * Single-Draw-Call Instanced Morphological Deep-Sky Simulation Shader (100% NaN-Safe!)
+ * Renders 2,600+ real OpenNGC Galaxies, Emission Nebulae, Planetary Nebulae, SNRs & Star Clusters
+ * in 1 GPU draw call using real catalog morphology:
+ *   0 = Grand-Design / Flocculent Spiral Galaxy (Sa / Sb / Sc)
+ *   1 = Barred Spiral Galaxy (SBa / SBb / SBc)
+ *   2 = Elliptical / Lenticular Galaxy (E0–E7 / S0)
+ *   3 = Turbulent H-II Emission / Reflection / Dark Nebula
+ *   4 = Limb-Brightened Planetary Nebula / Supernova Remnant Bipolar Shell
+ *   5 = Resolved Globular / Open Star Cluster
+ */
+export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uGlobalFade: { value: 1.0 },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
+
+      attribute vec3 aCenterPos;
+      attribute float aBaseRadius;
+      attribute float aMorph;
+      attribute vec3 aShape; // x = axisRatio, y = posAngleRad, z = seed
+      attribute vec3 aPrimaryCol;
+      attribute vec3 aSecondaryCol;
+      attribute float aAlpha;
+      attribute float aHighlight;
+
+      uniform float uGlobalFade;
+
+      varying vec2 vLocal;
+      varying float vMorph;
+      varying float vAxisRatio;
+      varying float vSeed;
+      varying vec3 vPrimaryCol;
+      varying vec3 vSecondaryCol;
+      varying float vAlpha;
+      varying float vHighlight;
+
+      void main() {
+        vLocal = position.xy;
+        vMorph = aMorph;
+        vAxisRatio = aShape.x;
+        vSeed = aShape.z;
+        vPrimaryCol = aPrimaryCol;
+        vSecondaryCol = aSecondaryCol;
+        vAlpha = aAlpha * uGlobalFade;
+        vHighlight = aHighlight;
+
+        if (vAlpha <= 0.003) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          return;
+        }
+
+        vec4 worldCenter = modelMatrix * vec4(aCenterPos, 1.0);
+        float distCam = length(cameraPosition - worldCenter.xyz);
+
+        // Camera-adaptive angular readability floor + true physical Light-Year scale on approach
+        float minAngFactor = (aMorph < 2.5) ? 0.0095 : (aMorph < 4.5 ? 0.0135 : 0.0085);
+        float minReadable = min(aBaseRadius * 14.0, distCam * minAngFactor * (1.0 + aHighlight * 0.45));
+        float radius = max(aBaseRadius, minReadable);
+
+        float ca = cos(aShape.y);
+        float sa = sin(aShape.y);
+        vec2 rotCorner = vec2(
+          position.x * ca - position.y * sa,
+          position.x * sa + position.y * ca
+        );
+
+        vec4 mvCenter = viewMatrix * worldCenter;
+        mvCenter.xy += rotCorner * radius;
+        gl_Position = projectionMatrix * mvCenter;
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
+
+      uniform float uTime;
+
+      varying vec2 vLocal;
+      varying float vMorph;
+      varying float vAxisRatio;
+      varying float vSeed;
+      varying vec3 vPrimaryCol;
+      varying vec3 vSecondaryCol;
+      varying float vAlpha;
+      varying float vHighlight;
+
+      float hash21(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21) + vSeed * 0.173);
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float noise2(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i);
+        float b = hash21(i + vec2(1.0, 0.0));
+        float c = hash21(i + vec2(0.0, 1.0));
+        float d = hash21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+      }
+
+      float fbm2(vec2 p) {
+        float v = 0.0;
+        float amp = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += amp * noise2(p);
+          p = p * 2.07 + vec2(1.7, -1.3);
+          amp *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        if (vAlpha <= 0.003) discard;
+        #include <logdepthbuf_fragment>
+
+        vec2 p = vLocal;
+        float rOuter = length(p);
+        if (rOuter > 1.0) discard;
+
+        float edgeVignette = smoothstep(1.0, 0.62, rOuter);
+        vec3 col = vec3(0.0);
+        float alpha = 0.0;
+
+        if (vMorph < 1.5) {
+          // 0 = Spiral Galaxy, 1 = Barred Spiral Galaxy
+          float ax = max(0.22, vAxisRatio);
+          vec2 q = vec2(p.x, p.y / ax);
+          float r = length(q);
+          if (r > 1.02) discard;
+
+          float theta = safeAtan(q.y, q.x);
+          float spin = uTime * 0.06 * (fract(vSeed * 7.3) > 0.5 ? 1.0 : -1.0);
+          float winding = 3.8 + fract(vSeed * 3.1) * 2.4;
+          float logR = log(r + 0.085);
+
+          float armPhase = 2.0 * (theta + spin) - winding * logR + vSeed * 6.28318;
+          float armWave = 0.5 + 0.5 * cos(armPhase);
+          float subArm = 0.5 + 0.5 * cos(armPhase * 2.0 + 1.1);
+          float flocculence = fbm2(q * 6.5 + vec2(vSeed * 5.0));
+
+          float arms = safePow(armWave, 2.4) * (0.65 + 0.55 * flocculence) + subArm * 0.18 * flocculence;
+          float diskEnv = exp(-r * 3.35) * smoothstep(1.0, 0.72, r);
+          float bulge = exp(-r * r * 24.0);
+
+          float bar = 0.0;
+          if (vMorph > 0.5) {
+            // Luminous stellar bar for SB galaxies
+            bar = exp(-q.y * q.y * 52.0) * exp(-q.x * q.x * 8.5) * 0.85;
+          }
+
+          // H-II star-forming knots along spiral arms
+          float hiiKnots = smoothstep(0.62, 0.88, flocculence) * safePow(armWave, 3.2) * exp(-r * 2.4) * smoothstep(0.08, 0.24, r);
+
+          vec3 coreCol = vec3(1.0, 0.91, 0.72);
+          vec3 armCol = mix(vPrimaryCol, vec3(0.55, 0.82, 1.0), 0.45);
+          vec3 hiiCol = vec3(0.98, 0.36, 0.68);
+
+          col = coreCol * (bulge * 1.35 + bar * 0.9) +
+                armCol * diskEnv * (0.28 + arms * 0.95) +
+                hiiCol * hiiKnots * 0.95;
+
+          alpha = clamp((bulge * 1.1 + bar * 0.65 + diskEnv * (0.26 + arms * 0.68)) * edgeVignette, 0.0, 1.0);
+        } else if (vMorph < 2.5) {
+          // 2 = Elliptical / Lenticular Galaxy (E0-E7 / S0)
+          float ax = max(0.32, vAxisRatio);
+          vec2 q = vec2(p.x, p.y / ax);
+          float r = length(q);
+          if (r > 1.0) discard;
+
+          float core = exp(-r * r * 20.0);
+          float halo = exp(-safePow(r, 0.68) * 3.6) * smoothstep(1.0, 0.55, r);
+          vec3 coreCol = vec3(1.0, 0.94, 0.80);
+          col = mix(vPrimaryCol, coreCol, clamp(core * 1.2 + 0.25, 0.0, 1.0)) * (core * 1.15 + halo * 0.95);
+          alpha = clamp((core + halo * 0.85) * edgeVignette, 0.0, 1.0);
+        } else if (vMorph < 3.5) {
+          // 3 = Turbulent H-II Emission / Reflection / Star-Forming Nebula
+          vec2 warp = vec2(
+            fbm2(p * 2.6 + vec2(vSeed * 3.7, uTime * 0.015)),
+            fbm2(p * 2.6 + vec2(vSeed * 9.1 + 4.2, -uTime * 0.012))
+          );
+          float gas1 = fbm2(p * 3.4 + warp * 1.45);
+          float gas2 = fbm2(p * 5.8 - warp * 1.15 + vec2(3.1));
+          float radial = exp(-rOuter * rOuter * 2.6) * edgeVignette;
+
+          // Dark Bok-globule dust lane carving dramatic contrast
+          float dustLane = smoothstep(0.34, 0.56, gas2);
+          float oiiiCore = exp(-rOuter * rOuter * 6.5) * gas1;
+
+          // Embedded newborn OB cluster stars inside the nebula
+          vec2 starGrid = p * 7.5 + vec2(vSeed * 11.0);
+          vec2 cellId = floor(starGrid);
+          vec2 cellUv = fract(starGrid) - 0.5;
+          float rnd = hash21(cellId);
+          float obStar = 0.0;
+          if (rnd > 0.78 && rOuter < 0.65) {
+            float dStar = length(cellUv - (vec2(fract(rnd * 13.7), fract(rnd * 29.3)) - 0.5) * 0.5);
+            obStar = exp(-dStar * dStar * 95.0) * 1.15;
+          }
+
+          col = vPrimaryCol * gas1 * radial * (0.45 + 0.85 * dustLane) +
+                vSecondaryCol * oiiiCore * 1.05 +
+                vec3(0.88, 0.96, 1.0) * obStar * radial;
+          alpha = clamp((gas1 * 0.95 + oiiiCore * 0.55 + obStar * 0.7) * radial, 0.0, 1.0);
+        } else if (vMorph < 4.5) {
+          // 4 = Limb-Brightened Planetary Nebula / Supernova Remnant Shock Shell
+          float ax = max(0.55, vAxisRatio);
+          vec2 q = vec2(p.x, p.y / ax);
+          float r = length(q);
+          if (r > 1.0) discard;
+
+          float theta = safeAtan(q.y, q.x);
+          float filaments = fbm2(vec2(cos(theta), sin(theta)) * 3.5 + q * 3.2 + vec2(vSeed * 4.0));
+          float dr = (r - 0.52 + (filaments - 0.5) * 0.14) * 5.6;
+          float shockRing = exp(-dr * dr) * (0.65 + 0.65 * filaments);
+          float innerCavity = exp(-r * r * 5.5) * 0.48;
+          float whiteDwarf = exp(-r * r * 140.0) * 1.25;
+
+          col = vPrimaryCol * shockRing * 1.15 +
+                vSecondaryCol * innerCavity +
+                vec3(0.92, 0.98, 1.0) * whiteDwarf;
+          alpha = clamp((shockRing * 0.92 + innerCavity * 0.55 + whiteDwarf * 0.85) * edgeVignette, 0.0, 1.0);
+        } else {
+          // 5 = Globular / Open Star Cluster
+          float kingCore = exp(-rOuter * rOuter * 9.5);
+          float halo = exp(-rOuter * 3.4) * edgeVignette;
+
+          vec2 g1 = p * 13.0 + vec2(vSeed * 17.0);
+          vec2 id1 = floor(g1);
+          vec2 uv1 = fract(g1) - 0.5;
+          float h1 = hash21(id1);
+          float stars = 0.0;
+          if (h1 > 0.42) {
+            vec2 jitter = (vec2(fract(h1 * 19.1), fract(h1 * 37.7)) - 0.5) * 0.55;
+            float ds = length(uv1 - jitter);
+            stars += exp(-ds * ds * 65.0) * (0.5 + 0.8 * fract(h1 * 53.3));
+          }
+
+          vec3 starCol = mix(vPrimaryCol, vec3(0.75, 0.9, 1.0), fract(h1 * 11.3) * 0.55);
+          col = vPrimaryCol * kingCore * 0.95 + starCol * stars * halo * 1.25;
+          alpha = clamp((kingCore * 0.88 + halo * 0.25 + stars * halo * 0.85) * edgeVignette, 0.0, 1.0);
+        }
+
+        // Simulation Highlight Target Ring when matched by active filter
+        if (vHighlight > 0.5) {
+          float hRing = smoothstep(0.055, 0.0, abs(rOuter - 0.86));
+          col += vec3(0.18, 0.92, 0.98) * hRing * 0.85;
+          alpha = max(alpha, hRing * 0.78);
+        }
+
+        gl_FragColor = vec4(col, clamp(alpha * vAlpha, 0.0, 1.0));
+      }
+    `,
+  });
+}
+
+/**
+ * Multi-Scale Scientific Simulation Coordinate Grid Shader (100% NaN-Safe!)
+ * Draws a razor-sharp, anti-aliased logarithmic polar astrometric reference grid
+ * locked to true powers-of-10 physical cosmic distances (10^n Light-Years / AU / km)
+ * with 15° radial azimuth bearings, cardinal J2000 axes, and smooth radial horizon fade.
+ */
+export function createSimulationGridMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uSpanLy: { value: 1.0 },
+      uOpacity: { value: 0.42 },
+      uTime: { value: 0 },
+      uPrimaryColor: { value: new THREE.Color('#22d3ee') },
+      uSecondaryColor: { value: new THREE.Color('#3b82f6') },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec2 vPlanePos;
+      void main() {
+        vPlanePos = position.xy * 2.0; // PlaneGeometry(1, 1) -> [-1, 1]
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
+
+      uniform float uSpanLy;
+      uniform float uOpacity;
+      uniform float uTime;
+      uniform vec3 uPrimaryColor;
+      uniform vec3 uSecondaryColor;
+
+      varying vec2 vPlanePos;
+
+      void main() {
+        if (uOpacity <= 0.004) discard;
+        #include <logdepthbuf_fragment>
+
+        float rNorm = length(vPlanePos);
+        if (rNorm > 1.0 || rNorm < 0.008) discard;
+
+        // Smooth inner & outer vignette so grid melts into deep space with zero hard border
+        float outerFade = (1.0 - rNorm) * (1.0 - rNorm);
+        float innerFade = smoothstep(0.008, 0.042, rNorm);
+        float radialMask = outerFade * innerFade;
+
+        // True physical radius in Light-Years around current floating-origin focus
+        float rLy = max(rNorm * uSpanLy, 1e-13);
+        float logR = log(rLy) * 0.4342944819; // log10(rLy)
+        float fwLog = max(fwidth(logR), 1e-4);
+
+        // Major decade range rings at every 10^n Light-Years
+        float decDist = abs(fract(logR + 0.5) - 0.5);
+        float majorRing = 1.0 - smoothstep(0.0, fwLog * 1.45, decDist);
+
+        // Minor logarithmic sub-rings (2x..9x within each power-of-10 decade, seam-free analytical derivative)
+        float mantissa = safePow(10.0, fract(logR)); // [1, 10)
+        float fwMant = max(mantissa * 2.302585 * fwLog, 1e-3);
+        float subDist = abs(fract(mantissa + 0.5) - 0.5);
+        float minorFade = clamp(1.0 - fwMant * 0.55, 0.0, 1.0);
+        float minorRing = (1.0 - smoothstep(0.0, fwMant * 1.25, subDist)) * minorFade * 0.34;
+
+        // Seam-free 24 Radial Azimuth Bearings (every 15 deg) + 4 Cardinal J2000 Axes (every 90 deg)
+        float angle = safeAtan(vPlanePos.y, vPlanePos.x);
+        float fwAngle = max(length(fwidth(vPlanePos)) / max(rNorm, 1e-3), 1e-4);
+        float spoke24 = (1.0 - smoothstep(0.0, 12.0 * fwAngle * 1.15, abs(sin(angle * 12.0)))) * 0.24;
+        float cardinalAxis = (1.0 - smoothstep(0.0, 2.0 * fwAngle * 1.4, abs(sin(angle * 2.0)))) * 0.58;
+
+        // Subtle sweeping astrometric radar pulse wave
+        float pulsePos = fract(uTime * 0.055);
+        float dp = (rNorm - pulsePos) * 14.0;
+        float scannerWave = exp(-dp * dp) * 0.09;
+
+        float lineIntensity = max(max(majorRing * 0.85, minorRing), max(cardinalAxis, spoke24)) + scannerWave;
+        if (lineIntensity * radialMask * uOpacity < 0.004) discard;
+
+        vec3 col = mix(uSecondaryColor, uPrimaryColor, clamp(majorRing + cardinalAxis * 0.8, 0.0, 1.0));
+        gl_FragColor = vec4(col, clamp(lineIntensity * radialMask * uOpacity, 0.0, 1.0));
+      }
+    `,
+  });
+}
+
+/**
+ * Animated 3D Scientific Target Lock-On Reticle Shader (100% NaN-Safe!)
+ * Renders rotating astrometric degree ticks, corner lock brackets, and telemetry ring around selected target.
+ */
+export function createTargetReticleMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color('#22d3ee') },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      varying vec2 vLocal;
+      void main() {
+        vLocal = position.xy * 2.0;
+        vec4 mvCenter = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        float scale = length(vec3(modelMatrix[0][0], modelMatrix[0][1], modelMatrix[0][2]));
+        mvCenter.xy += position.xy * scale;
+        gl_Position = projectionMatrix * mvCenter;
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
+
+      uniform float uTime;
+      uniform vec3 uColor;
+      varying vec2 vLocal;
+
+      void main() {
+        #include <logdepthbuf_fragment>
+        vec2 p = vLocal;
+        vec2 ap = abs(p);
+        float r = length(p);
+        if (r > 1.15) discard;
+
+        // Rotating segmented astrometric outer ring
+        float ang = safeAtan(p.y, p.x) + uTime * 0.45;
+        float dash = step(0.35, fract(ang * (12.0 / (2.0 * PI))));
+        float ringOuter = smoothstep(0.032, 0.0, abs(r - 0.78)) * dash * 0.78;
+
+        // Counter-rotating inner vernier ring
+        float ang2 = safeAtan(p.y, p.x) - uTime * 0.7;
+        float dash2 = step(0.65, fract(ang2 * (24.0 / (2.0 * PI))));
+        float ringInner = smoothstep(0.022, 0.0, abs(r - 0.62)) * dash2 * 0.55;
+
+        // Corner [ + ] framing brackets
+        float cornerBox = max(ap.x, ap.y);
+        float bracketBand = smoothstep(0.032, 0.0, abs(cornerBox - 0.94));
+        float cornerMask = step(0.66, ap.x) * step(0.66, ap.y) * bracketBand * 0.92;
+        float cornerArm = (
+          smoothstep(0.026, 0.0, abs(ap.x - 0.94)) * step(0.68, ap.y) * step(ap.y, 0.96) +
+          smoothstep(0.026, 0.0, abs(ap.y - 0.94)) * step(0.68, ap.x) * step(ap.x, 0.96)
+        ) * 0.92;
+
+        float alpha = clamp(ringOuter + ringInner + max(cornerMask, cornerArm), 0.0, 1.0);
+        if (alpha < 0.01) discard;
+        gl_FragColor = vec4(uColor, alpha);
+      }
+    `,
+  });
+}
+
+/**
+ * Directional Comet-Tail Orbital Trajectory Shader (100% NaN-Safe!)
+ * Shows live orbital velocity direction around planets & moons with a bright leading head
+ * right at the body's current position tapering smoothly around the 360° ellipse.
+ */
+export function createDirectionalOrbitMaterial(colorHex: string, baseOpacity = 0.72): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uColor: { value: new THREE.Color(colorHex) },
+      uBodyDir: { value: new THREE.Vector3(1, 0, 0) },
+      uOpacity: { value: baseOpacity },
+    },
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      ${GLSL_SAFE_MATH}
+      varying vec3 vDirOS;
+      void main() {
+        vDirOS = safeNorm(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${GLSL_SAFE_MATH}
+
+      uniform vec3 uColor;
+      uniform vec3 uBodyDir;
+      uniform float uOpacity;
+      varying vec3 vDirOS;
+
+      void main() {
+        if (uOpacity <= 0.005) discard;
+        #include <logdepthbuf_fragment>
+
+        // Compute prograde J2000 counter-clockwise angle behind uBodyDir in XZ equatorial/ecliptic plane
+        vec2 b = safeNorm(vec3(uBodyDir.x, 0.0, uBodyDir.z)).xz;
+        vec2 p = safeNorm(vec3(vDirOS.x, 0.0, vDirOS.z)).xz;
+        float angB = safeAtan(-b.y, b.x);
+        float angP = safeAtan(-p.y, p.x);
+        // Prograde motion increases RA (which is -Z in Three.js right-handed basis), so behind body is angB - angP mod 2PI
+        float behind = fract((angB - angP) / (2.0 * PI));
+        // trail = 1.0 right at the planet's live position, tapering smoothly along its wake!
+        float wake = safePow(1.0 - behind, 2.6);
+        float alpha = (0.14 + 0.86 * wake) * uOpacity;
+        vec3 col = mix(uColor, vec3(0.88, 0.97, 1.0), wake * 0.42);
+        gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
       }
     `,
   });

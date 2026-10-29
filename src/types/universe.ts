@@ -143,6 +143,12 @@ export interface DeepSpaceRecord {
   sizeLy: number;
   mag?: number;
   color: string;
+  morphCode?: number;
+  hubbleType?: string;
+  axisRatio?: number;
+  posAngleDeg?: number;
+  messier?: string | null;
+  constellation?: string | null;
   telescope?: string;
   nasaQuery: string;
   heroImage: string | null;
@@ -200,6 +206,7 @@ export interface LayerVisibility {
   exoplanets: boolean;
   deepSpace: boolean;
   cosmicWeb: boolean;
+  simGrid: boolean;
   labels: boolean;
   helicalMotion: boolean;
   trueScaleBodies: boolean;
