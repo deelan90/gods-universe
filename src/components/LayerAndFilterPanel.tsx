@@ -69,7 +69,7 @@ export const LayerAndFilterPanel: React.FC<Props> = React.memo(
     };
 
     return (
-      <aside className="pointer-events-auto animate-panel-in w-80 max-w-[92vw] max-h-[calc(100vh-155px)] flex flex-col rounded-2xl glass-panel overflow-hidden text-xs">
+      <aside className="pointer-events-auto animate-panel-in w-full sm:w-80 max-h-[calc(100dvh-13rem)] sm:max-h-[calc(100dvh-12.25rem)] flex flex-col rounded-2xl glass-panel overflow-hidden text-xs">
         {/* Tab Switcher */}
         <div className="flex items-center justify-between px-3 pt-3 pb-2.5 border-b border-white/10 bg-white/[0.02]">
           <div className="grid grid-cols-2 gap-1.5 flex-1">
@@ -117,18 +117,19 @@ export const LayerAndFilterPanel: React.FC<Props> = React.memo(
 
               {(
                 [
-                  ['simGrid', 'Astrometric Simulation Grid & RA/Dec', 'Logarithmic range rings, bearings & GEO belt'],
-                  ['satellites', 'Live Earth Satellites (NORAD SGP4)', '458 active LEO/MEO/GEO spacecraft'],
-                  ['planetOrbits', 'Solar System Orbital Paths', '3D velocity-wake elliptical trajectories'],
-                  ['constellations', '88 IAU Constellations (3D)', 'True 3D Hipparcos star stick vectors'],
-                  ['zodiacSigns', '12 Zodiac Star Signs & Ecliptic', '♈–♓ star signs & ecliptic ring'],
-                  ['habitableZones', 'Star Habitable Zones (Goldilocks)', 'Liquid-water orbital rings around stars'],
-                  ['exoplanets', 'NASA Confirmed Exoplanets', '6,400+ worlds from Caltech TAP archive'],
-                  ['deepSpace', 'OpenNGC Galaxies, Nebulae & 2.5D', '2,649 spiral galaxies, nebulae & clusters'],
-                  ['cosmicWeb', 'Milky Way, Cosmic Web & CMB', 'Spiral arms, redshift filaments & 46.5 Gly CMB'],
-                  ['helicalMotion', 'Solar System Velocity & Vortex Trail', 'Real-time 230 km/s galactic corkscrew'],
-                  ['labels', 'Interactive Name Markers', 'Zero-lag 120Hz simulation callouts'],
-                  ['trueScaleBodies', 'Strict 1:1 Planet Radii', 'Disable adaptive readable size boost'],
+                  ['spacecraft', 'Deep-space probes (live)', 'Voyagers, New Horizons, JWST, Parker & more'],
+                  ['satellites', 'Earth satellites & space stations', 'ISS, Tiangong and ~450 live orbits'],
+                  ['planetOrbits', 'Planet orbits', 'Orbital paths around the Sun'],
+                  ['constellations', 'Constellations', 'All 88 IAU star patterns in true 3D'],
+                  ['zodiacSigns', 'Zodiac signs & ecliptic', 'The 12 zodiac constellations'],
+                  ['habitableZones', 'Habitable zones', 'Where liquid water could exist around stars'],
+                  ['exoplanets', 'Exoplanets', '6,400+ confirmed worlds (NASA archive)'],
+                  ['deepSpace', 'Galaxies, nebulae & clusters', '2,600+ deep-sky objects'],
+                  ['cosmicWeb', 'Milky Way & cosmic web', 'Spiral arms, filaments and the CMB edge'],
+                  ['simGrid', 'Range grid & sky coordinates', 'Distance rings and RA/Dec bearings'],
+                  ['helicalMotion', 'Solar System motion trail', 'Our 230 km/s corkscrew through the galaxy'],
+                  ['labels', 'Name labels', 'On-screen names for nearby objects'],
+                  ['trueScaleBodies', 'True-scale planet sizes', 'Turn off the readable size boost'],
                 ] as [keyof LayerVisibility, string, string][]
               ).map(([key, title, desc]) => (
                 <label

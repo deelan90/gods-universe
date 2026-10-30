@@ -23,6 +23,7 @@ interface Props {
   onFlyTo: (id: string) => void;
   onSetAsOrigin: (id: string) => void;
   onOpen25DImage: (img: TelescopeImage, sphericalDefault: boolean) => void;
+  liveContent?: React.ReactNode;
 }
 
 export const ObjectDossierDrawer: React.FC<Props> = React.memo(
@@ -35,6 +36,7 @@ export const ObjectDossierDrawer: React.FC<Props> = React.memo(
     onFlyTo,
     onSetAsOrigin,
     onOpen25DImage,
+    liveContent,
   }) => {
     const [images, setImages] = useState<TelescopeImage[]>([]);
     const [failedIds, setFailedIds] = useState<Set<string>>(new Set());
@@ -132,7 +134,7 @@ export const ObjectDossierDrawer: React.FC<Props> = React.memo(
     const leadBannerImage = validImages[0] || null;
 
     return (
-      <aside className="pointer-events-auto animate-panel-in fixed bottom-0 inset-x-0 sm:inset-auto sm:top-16 sm:right-3.5 sm:bottom-24 z-30 w-full sm:w-[24.5rem] max-h-[72vh] sm:max-h-none flex flex-col rounded-t-2xl sm:rounded-2xl glass-panel overflow-hidden text-xs">
+      <aside className="pointer-events-auto animate-panel-in fixed bottom-0 inset-x-0 sm:inset-auto sm:top-16 sm:right-3.5 sm:bottom-[7.5rem] z-30 w-full sm:w-[24.5rem] max-h-[72vh] sm:max-h-none flex flex-col rounded-t-2xl sm:rounded-2xl glass-panel overflow-hidden text-xs">
         {/* Cinematic Hero Image Header */}
         <div className="relative h-36 sm:h-40 w-full shrink-0 overflow-hidden bg-slate-950 border-b border-white/10">
           {leadBannerImage ? (
@@ -241,6 +243,8 @@ export const ObjectDossierDrawer: React.FC<Props> = React.memo(
               <Compass className="w-5 h-5 text-emerald-400/75 shrink-0" />
             </div>
           )}
+
+          {liveContent}
 
           {/* Physical Telemetry Grid */}
           {(object.earthRadii || object.solarRadii || object.tempK || object.orbPeriodDays) && (

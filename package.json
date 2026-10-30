@@ -1,16 +1,17 @@
 {
   "name": "gods-universe",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "God's Universe — Interactive 3D Map & Live Telemetry Observatory of the Observable Universe",
   "type": "module",
   "scripts": {
-    "sync-data": "node server/syncData.mjs",
+    "sync-data": "node server/syncData.mjs && node server/syncLive.mjs",
     "server": "node server/index.mjs",
     "client": "vite",
     "dev": "concurrently -k -n API,WEB -c cyan,magenta \"node server/index.mjs\" \"vite\"",
     "build": "tsc -b && vite build",
-    "preview": "node server/index.mjs --serve-static"
+    "preview": "node server/index.mjs --serve-static",
+    "sync-live": "node server/syncLive.mjs"
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",
