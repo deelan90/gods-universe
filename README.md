@@ -23,6 +23,35 @@ An interactive, tactical 3D map and live telemetry observatory of the **Observab
 - **Continual Auto-Sync Daemon**:
   - Automatically checks public data archives every **72 hours (3 days)** (configurable to 24h / 72h / 7d, plus manual 1-click sync) to pull newly confirmed exoplanets and fresh satellite orbital elements.
 
+## What's new (v1.1)
+
+### Live spacecraft tracker (press `T`)
+- **Space stations** — the ISS and Tiangong (plus any new commercial station that appears in the NORAD catalogue) with live latitude/longitude, altitude, speed, sunlight/shadow, and a world map with the last 45 minutes and next 90 minutes of ground track. Orbits refresh straight from CelesTrak in the browser when the synced copy is more than 6 hours old.
+- **Deep space** — Voyager 1 & 2, New Horizons, Pioneer 10 & 11, Parker Solar Probe, Solar Orbiter, JWST, Euclid, BepiColombo, Hera, Psyche, Lucy, Europa Clipper, JUICE, Juno, Curiosity and Perseverance. Shows distance from Earth and the Sun, one-way radio delay, and speed. All of them are drawn in the 3D scene and are searchable.
+- Positions come from **NASA/JPL Horizons** state vectors (refreshed every 6 hours by `npm run sync-live`) and are Hermite-interpolated in real time. If the file is missing or out of range, a built-in two-body Kepler propagator (seeded with Horizons vectors from 30 Oct 2026) takes over, so the app never shows a stale position.
+
+### Weather on other worlds (press `M`)
+- **Mars** — the latest Curiosity REMS daily report from Gale Crater (air and ground temperature, pressure, sky, UV, sunrise/sunset, recent trend), plus today's Mars season, local solar time at Gale and Jezero, and dust-storm season (Mars24 / Allison & McEwen algorithm).
+- **The Sun** — live space weather from NOAA SWPC: solar-wind speed, Kp geomagnetic index, X-ray flare class and NOAA R/S/G scales.
+- **Every other planet, Titan and Pluto** — today's distance from the Sun, sunlight strength and signal delay, with typical conditions clearly labelled as typical.
+
+### Navigation
+- **Command palette** (`/` or `Ctrl/⌘ K`) — search 10,000+ objects, recent searches, popular destinations, and every action (zoom presets, layers, panels).
+- **Tool rail** on the left (icons on mobile); one panel open at a time.
+- **Shareable links** — the address bar follows your selection (`#/o/voyager-1`).
+- **Keyboard shortcuts** — press `?` in the app for the full list. `1`–`7` jump between zoom levels, `H` goes home, `P` pauses time, `L` returns to live time.
+
+## Data refresh schedule
+
+| Data | Source | How often |
+| --- | --- | --- |
+| Exoplanets, stars, satellites, deep sky | NASA Exoplanet Archive, HYG, CelesTrak, OpenNGC | Every 3 days (`npm run sync-data`) |
+| Spacecraft positions, Mars weather, station orbits | JPL Horizons, NASA/CAB REMS, CelesTrak | Every 6 hours (`npm run sync-live`) |
+| Space weather | NOAA SWPC | Live in the browser, every 5 minutes |
+| Station orbits (fallback) | CelesTrak | Live in the browser when older than 6 hours |
+
+The GitHub Actions workflow runs both schedules. Live data ships with each Pages deploy and is not committed, so the 6-hour refresh doesn't add commits.
+
 ## Quick Start
 
 ```bash
@@ -31,6 +60,9 @@ npm install
 
 # (Optional) Manually force a fresh sync from NASA, CelesTrak, and HYG archives
 npm run sync-data
+
+# (Optional) Refresh only spacecraft positions, Mars weather and station orbits
+npm run sync-live
 
 # Launch both the Continual Sync/Image Proxy API (port 8787) and Vite Web App (port 5173)
 npm run dev

@@ -10,6 +10,21 @@ import {
   ROOT_DIR,
   runUniverseSync,
 } from './syncData.mjs';
+import { runLiveSync } from './syncLive.mjs';
+
+const LIVE_SYNC_INTERVAL_MS = 6 * 3600 * 1000;
+let liveSyncRunning = false;
+async function triggerLiveSync() {
+  if (liveSyncRunning) return;
+  liveSyncRunning = true;
+  try {
+    await runLiveSync();
+  } catch (e) {
+    console.warn('[LiveSync] warning:', e.message);
+  } finally {
+    liveSyncRunning = false;
+  }
+}
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
@@ -37,6 +52,7 @@ async function triggerSyncIfNeeded(force = false) {
   isSyncing = true;
   try {
     const result = await runUniverseSync({ force, syncIntervalHours });
+    if (force) await triggerLiveSync();
     return { inProgress: false, ...result };
   } finally {
     isSyncing = false;
@@ -244,4 +260,7 @@ app.listen(PORT, () => {
   setInterval(() => {
     triggerSyncIfNeeded(false).catch((e) => console.warn('[AutoSync] Periodic check warning:', e.message));
   }, 3600 * 1000);
+  // Spacecraft positions, Mars weather and station orbits: on startup, then every 6 hours
+  triggerLiveSync();
+  setInterval(triggerLiveSync, LIVE_SYNC_INTERVAL_MS);
 });

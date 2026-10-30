@@ -56,6 +56,30 @@ function formatKmOdometer(km: number): string {
   return `${(km / 9.4607e12).toFixed(3)} ly`;
 }
 
+// Map the engine's scale readout to the preset buttons so the current zoom is highlighted
+function scaleMatches(preset: string, label: string): boolean {
+  const l = label.toUpperCase();
+  if (l.includes('EXTRAGALACTIC') && preset !== 'milky-way') return false;
+  switch (preset) {
+    case 'earth-orbit':
+      return l.includes('EARTH ORBIT');
+    case 'solar-system':
+      return l.includes('SOLAR SYSTEM') || l.includes('OORT');
+    case 'interstellar':
+      return l.includes('STELLAR NEIGHBORHOOD');
+    case 'milky-way':
+      return l.includes('MILKY WAY');
+    case 'local-group':
+      return l.includes('LOCAL GROUP') || l.includes('GALAXY GROUP');
+    case 'superclusters':
+      return l.includes('SUPERCLUSTER');
+    case 'observable-universe':
+      return l.includes('OBSERVABLE');
+    default:
+      return false;
+  }
+}
+
 export const TimeAndVelocityBar: React.FC<Props> = React.memo(
   ({
     playing,
@@ -69,41 +93,47 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
     onJumpScale,
   }) => {
     const simDateStr = telemetry
-      ? new Date(telemetry.simTimeMs).toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
-      : 'LIVE UTC';
+      ? new Date(telemetry.simTimeMs).toISOString().replace('T', ' ').slice(0, 16) + ' UTC'
+      : '';
+    const isLive =
+      playing && timeScale === 1 && (!telemetry || Math.abs(telemetry.simTimeMs - Date.now()) < 90_000);
 
     return (
       <footer className="pointer-events-none fixed bottom-0 inset-x-0 z-20 p-2.5 sm:p-3.5 flex flex-col gap-2">
-        {/* Quick Scale Jump Pills (Scrollable on Mobile, Centered on Desktop) */}
-        <div className="pointer-events-auto mx-auto max-w-full overflow-x-auto flex items-center gap-1 px-2 py-1 rounded-full glass-pill">
+        {/* Zoom presets — keys 1–7 */}
+        <div className="pointer-events-auto mx-auto max-w-full overflow-x-auto no-scrollbar flex items-center gap-0.5 px-1.5 py-1 rounded-full glass-pill">
           {(
             [
-              ['earth-orbit', 'Earth & Satellites'],
+              ['earth-orbit', 'Earth'],
               ['solar-system', 'Solar System'],
-              ['interstellar', 'Stars & Exoplanets'],
+              ['interstellar', 'Nearby stars'],
               ['milky-way', 'Milky Way'],
               ['local-group', 'Local Group'],
-              ['superclusters', 'Virgo & Superclusters'],
-              ['observable-universe', 'Observable Universe (93 Gly)'],
+              ['superclusters', 'Superclusters'],
+              ['observable-universe', 'Whole universe'],
             ] as const
-          ).map(([preset, label]) => (
-            <button
-              key={preset}
-              onClick={() => onJumpScale(preset)}
-              className="px-2.5 py-1 rounded-full text-[11px] font-medium text-slate-300 hover:text-cyan-200 hover:bg-cyan-500/15 whitespace-nowrap transition"
-            >
-              {label}
-            </button>
-          ))}
-          <span className="hidden xl:inline-block pl-2 pr-1.5 text-[10px] font-mono text-cyan-300/70 border-l border-white/10 whitespace-nowrap">
-            WASD / Right-Drag: Roam • Dbl-Click: Warp
-          </span>
+          ).map(([preset, label], i) => {
+            const active = telemetry?.scaleLabel ? scaleMatches(preset, telemetry.scaleLabel) : i === 0;
+            return (
+              <button
+                key={preset}
+                onClick={() => onJumpScale(preset)}
+                className={`group px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition flex items-center gap-1.5 ${
+                  active ? 'bg-cyan-500/20 text-cyan-100' : 'text-slate-300 hover:text-cyan-200 hover:bg-cyan-500/10'
+                }`}
+                title={`Zoom to ${label} (key ${i + 1})`}
+              >
+                <span className="hidden lg:inline font-mono text-[9px] text-slate-500 group-hover:text-cyan-300/80">{i + 1}</span>
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {/* Main Bottom Command & Real-Time Solar System Velocity Bar */}
-        <div className="pointer-events-auto mx-auto w-full max-w-6xl rounded-2xl glass-panel px-3 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="pointer-events-auto mx-auto w-full max-w-6xl rounded-2xl glass-panel px-2.5 sm:px-3 py-2 flex items-center justify-between gap-2 sm:gap-3 text-xs">
           {/* Left: Play/Pause, Live Reset & Time-Scale Controls */}
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               onClick={onTogglePlay}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-semibold border transition ${
@@ -111,17 +141,18 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
                   ? 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200'
                   : 'bg-amber-500/20 border-amber-400/60 text-amber-200'
               }`}
-              title={playing ? 'Pause Universe Motion' : 'Resume Universe Motion'}
+              title={playing ? 'Pause time (P)' : 'Resume time (P)'}
+              aria-label={playing ? 'Pause time' : 'Resume time'}
             >
               {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{playing ? 'Running' : 'Paused'}</span>
+              <span className="hidden sm:inline">{playing ? 'Running' : 'Paused'}</span>
             </button>
 
             <select
               value={timeScale}
               onChange={(e) => onChangeTimeScale(Number(e.target.value))}
-              className="px-2.5 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 font-mono text-xs text-white focus:outline-none focus:border-cyan-400 cursor-pointer"
-              title="Change Time Scaling of the Universe"
+              className="px-2 py-1.5 rounded-xl bg-white/[0.04] border border-white/10 font-mono text-xs text-white focus:outline-none focus:border-cyan-400 cursor-pointer max-w-[8.5rem] sm:max-w-none"
+              title="How fast time runs"
             >
               {TIME_SCALE_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value} className="bg-slate-950">
@@ -130,28 +161,32 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
               ))}
             </select>
 
-            <button
-              onClick={onResetLive}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.09] border border-white/10 text-slate-300 hover:text-white font-mono text-[11px] transition"
-              title="Reset clock to Live Real-Time (1×) & clear distance stopwatch"
-            >
-              <RotateCcw className="w-3 h-3 text-emerald-400" />
-              <span>LIVE 1×</span>
-            </button>
+            {isLive ? (
+              <span className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-300 font-mono text-[10.5px]" title="Showing the universe as it is right now">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> LIVE
+              </span>
+            ) : (
+              <button
+                onClick={onResetLive}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-[11px] transition whitespace-nowrap"
+                title="Jump back to the present at normal speed (L)"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Back to now</span>
+              </button>
+            )}
 
-            <span className="hidden xl:inline font-mono text-[11px] text-slate-400 pl-1">
+            <span className="hidden md:inline font-mono text-[11px] text-slate-400 pl-1 whitespace-nowrap" title="Simulated date and time (UTC)">
               {simDateStr}
             </span>
           </div>
 
           {/* Center/Right: Solar System Speed & Distance Odometer + Helical Motion Toggle */}
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="hidden sm:flex items-center gap-3 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/[0.08] font-mono">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="hidden xl:flex items-center gap-3 px-3 py-1.5 rounded-xl bg-white/[0.03] border border-white/[0.08] font-mono">
               <div className="flex items-center gap-1.5 text-slate-400">
                 <Gauge className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <span className="text-[10px] uppercase tracking-wider hidden lg:inline">
-                  Solar Velocity:
-                </span>
+
               </div>
 
               <div title="Earth orbital velocity around the Sun (29.78 km/s = 107,222 km/h)">
@@ -193,7 +228,7 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
               title="Visualize Solar System speed in 3D space with real-time velocity lattice & helical planetary vortex trails"
             >
               <Orbit className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{helicalMotion ? '3D Helical Motion: ON' : 'Visualize Solar Speed'}</span>
+              <span className="hidden sm:inline">{helicalMotion ? 'Motion trail on' : 'Show our motion'}</span>
             </button>
           </div>
         </div>

@@ -107,3 +107,33 @@ input[type='range'] {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(56, 189, 248, 0.52);
 }
+
+/* Hide scrollbars on horizontally scrolling chip rows */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Soft fade on the right edge of scrolling chip rows */
+.mask-fade-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+  padding-right: 40px;
+}
+
+/* Visible keyboard focus for everything interactive */
+:where(button, a, select, input, [role='option']):focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.85);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-panel-in,
+  .animate-ping,
+  .animate-pulse,
+  .shimmer-bg {
+    animation: none !important;
+  }
+}

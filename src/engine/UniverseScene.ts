@@ -49,6 +49,11 @@ import {
   createTexturedPlanetMaterial,
 } from './shaders';
 import { resolveWebGLTextureUrls } from '../utils/nasaImagesClient';
+import {
+  computeSpacecraftState,
+  SPACECRAFT_FLEET,
+  type SpacecraftEphemerisFile,
+} from '../utils/spacecraft';
 
 export interface SceneTelemetrySnapshot {
   scaleLabel: string;
@@ -162,6 +167,7 @@ export class UniverseScene {
   private cachedEarthRotRad: number = 0;
 
   private livePositionsLy: Map<string, [number, number, number]> = new Map();
+  private spacecraftEphem: SpacecraftEphemerisFile | null = null;
 
   // Scene Groups
   private skyPanoramaMesh: THREE.Mesh | null = null;
@@ -1201,7 +1207,7 @@ export class UniverseScene {
     placeholderTex.needsUpdate = true;
 
     for (const d of allDeep) {
-      if (d.id === 'jwst') continue;
+      if (d.category === 'spacecraft') continue; // positioned live in updateDynamicPositions
       this.livePositionsLy.set(d.id, d.posLy);
       if (d.id === 'cmb-horizon') continue;
 
@@ -2150,9 +2156,20 @@ export class UniverseScene {
           desiredRadius = Math.max(0.08, obj.semiMajorAxisAu || 0.15) * RENDER_UNITS_PER_AU * 1.4;
           this.buildVisitedExoplanetSystem(id);
           break;
-        case 'spacecraft':
-          desiredRadius = id === 'jwst' ? 8_000 : 1.5 * RENDER_UNITS_PER_AU;
+        case 'spacecraft': {
+          const craft = SPACECRAFT_FLEET.find((c) => c.id === id);
+          desiredRadius =
+            craft?.group === 'observatory'
+              ? 8_000
+              : craft?.group === 'surface'
+                ? 40
+                : craft?.group === 'orbiting'
+                  ? 320
+                  : craft?.group === 'interstellar'
+                    ? 3 * RENDER_UNITS_PER_AU
+                    : 0.3 * RENDER_UNITS_PER_AU;
           break;
+        }
         case 'nebula':
         case 'cluster': {
           this.ensureDeepSpaceTexturesLoaded();
@@ -2236,6 +2253,21 @@ export class UniverseScene {
     }
   }
 
+  public setSpacecraftEphemeris(file: SpacecraftEphemerisFile | null) {
+    this.spacecraftEphem = file;
+    this.lastSolarEphemRealMs = 0;
+  }
+
+  /** Swap in fresher NORAD elements (e.g. live CelesTrak station data) without reloading everything */
+  public updateSatelliteElements(records: SatelliteRecord[]) {
+    const fresh = new Map(compileSatellites(records).map((c) => [c.record.noradId, c]));
+    for (let i = 0; i < this.compiledSatellites.length; i++) {
+      const next = fresh.get(this.compiledSatellites[i].record.noradId);
+      if (next) this.compiledSatellites[i].satrec = next.satrec;
+    }
+    this.lastSatPropRealMs = 0;
+  }
+
   public getLivePositionLy(id: string): [number, number, number] {
     return this.livePositionsLy.get(id) || this.catalogById.get(id)?.basePosLy || [0, 0, 0];
   }
@@ -2295,6 +2327,18 @@ export class UniverseScene {
         if (alphaAttr.getX(i) < 0.05) continue;
         proj.set(satOrigin.x + posAttr.getX(i), satOrigin.y + posAttr.getY(i), satOrigin.z + posAttr.getZ(i));
         testScreenCandidate(proj, this.compiledSatellites[i].record.id, 3);
+      }
+    }
+
+    if (this.layers.spacecraft) {
+      for (const craft of SPACECRAFT_FLEET) {
+        const p = this.getLivePositionLy(craft.id);
+        proj.set(
+          (p[0] - this.focusPosLy[0]) * RENDER_UNITS_PER_LY,
+          (p[1] - this.focusPosLy[1]) * RENDER_UNITS_PER_LY,
+          (p[2] - this.focusPosLy[2]) * RENDER_UNITS_PER_LY
+        );
+        testScreenCandidate(proj, craft.id, 6);
       }
     }
 
@@ -2375,6 +2419,17 @@ export class UniverseScene {
       const solarPosMap = computeSolarSystemPositionsLy(simDate, solarOffsetLy);
       for (const [id, posLy] of Object.entries(solarPosMap)) {
         this.livePositionsLy.set(id, posLy);
+      }
+
+      // Deep-space spacecraft: JPL Horizons tracks (or Kepler / parent-body fallbacks)
+      for (const craft of SPACECRAFT_FLEET) {
+        const st = computeSpacecraftState(craft, simDate, this.spacecraftEphem);
+        const [lx, ly, lz] = [
+          st.posAu[0] / AU_PER_LY,
+          st.posAu[2] / AU_PER_LY,
+          -st.posAu[1] / AU_PER_LY,
+        ];
+        this.livePositionsLy.set(craft.id, [solarOffsetLy[0] + lx, solarOffsetLy[1] + ly, solarOffsetLy[2] + lz]);
       }
 
       if (this.layers.helicalMotion && Math.abs(this.simTimeMs - this.lastTrailSampleSimMs) > 60_000) {
@@ -3055,8 +3110,25 @@ export class UniverseScene {
           emitMarker(comp.record.id, comp.record.name, '#fde047', this.getLivePositionLy(comp.record.id), 'LIVE');
         }
       }
-      if (camAu > 0.004) emitMarker('jwst', 'JWST (L2)', '#fbbf24', this.getLivePositionLy('jwst'));
-      if (camAu > 12) emitMarker('voyager-1', 'Voyager 1', '#38bdf8', this.getLivePositionLy('voyager-1'));
+    }
+
+    // Live deep-space spacecraft markers (scale-aware so inner-system craft don't clutter wide views)
+    if (this.layers.spacecraft && distFromSunLy < 0.05 && camAu > 0.004 && camAu < 4000) {
+      for (const craft of SPACECRAFT_FLEET) {
+        if (craft.id === this.selectedObjectId) continue;
+        const p = this.getLivePositionLy(craft.id);
+        const rAu = Math.hypot(p[0] - this.focusPosLy[0], p[1] - this.focusPosLy[1], p[2] - this.focusPosLy[2]) * AU_PER_LY;
+        if (craft.group === 'observatory') {
+          if (camAu > 0.6) continue;
+        } else if (craft.group === 'surface' || craft.group === 'orbiting') {
+          if (camAu < 0.05 || camAu > 40) continue;
+        } else if (craft.group === 'interstellar') {
+          if (camAu < 8) continue;
+        } else if (camAu > 30 || rAu > camAu * 6) {
+          continue;
+        }
+        emitMarker(craft.id, craft.shortName, craft.color, p, craft.status === 'silent' ? 'SILENT' : 'PROBE');
+      }
     }
 
     if (this.layers.zodiacSigns && effectiveSolarLy >= 0.02 && effectiveSolarLy < 2000) {
@@ -3090,7 +3162,7 @@ export class UniverseScene {
     if (this.layers.deepSpace && this.deepSpace && effectiveSolarLy >= 0.35) {
       const catFilter = this.filters.deepSpaceCategory;
       for (const lm of this.deepSpace.landmarks) {
-        if (lm.id === 'jwst' || lm.id === 'voyager-1') continue;
+        if (lm.category === 'spacecraft') continue;
         if (catFilter !== 'ALL' && lm.category !== catFilter) continue;
         const dFocusLy = Math.hypot(
           lm.posLy[0] - this.focusPosLy[0],

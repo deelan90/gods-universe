@@ -3,9 +3,11 @@ name: Sync Astronomical Archives & Deploy GitHub Pages
 on:
   push:
     branches: ['main']
-  # Automatically check NASA Exoplanet Archive, CelesTrak Satellites & Star Catalogs every 3 days
   schedule:
+    # Full catalog sync (exoplanets, stars, satellites, deep sky) every 3 days
     - cron: '0 6 */3 * *'
+    # Live refresh (spacecraft positions, Mars weather, space-station orbits) every 6 hours
+    - cron: '23 */6 * * *'
   # Allow manual 1-click sync & deploy from the GitHub Actions tab
   workflow_dispatch:
 
@@ -36,8 +38,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Sync fresh NASA Exoplanets, Satellites & Catalogs (Scheduled or Manual Run)
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      - name: Sync fresh NASA Exoplanets, Satellites & Catalogs (3-day schedule or manual run)
+        if: (github.event_name == 'schedule' && github.event.schedule == '0 6 */3 * *') || github.event_name == 'workflow_dispatch'
         run: |
           npm run sync-data
           git config user.name "github-actions[bot]"
@@ -49,6 +51,12 @@ jobs:
           else
             echo "Catalogs already up to date."
           fi
+
+      # Runs on every build. Results ship in the deployed site only (not committed),
+      # so the 6-hourly refresh does not add commits to the repo.
+      - name: Refresh live spacecraft positions, Mars weather & station orbits
+        continue-on-error: true
+        run: npm run sync-live
 
       - name: Build production web observatory
         run: npm run build

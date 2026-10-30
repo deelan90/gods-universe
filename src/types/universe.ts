@@ -216,6 +216,7 @@ export interface UnifiedCelestialObject {
 
 export interface LayerVisibility {
   satellites: boolean;
+  spacecraft: boolean;
   planetOrbits: boolean;
   constellations: boolean;
   zodiacSigns: boolean;

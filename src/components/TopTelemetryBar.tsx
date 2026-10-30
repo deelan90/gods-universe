@@ -1,110 +1,64 @@
-import React, { useMemo, useRef, useState } from 'react';
-import {
-  Search,
-  SlidersHorizontal,
-  Navigation,
-  RefreshCw,
-  Sparkles,
-  Eye,
-  Compass,
-  Camera,
-  Move,
-  X,
-} from 'lucide-react';
-import type {
-  ApodEntry,
-  LayerVisibility,
-  OpticalMode,
-  SyncManifest,
-  UnifiedCelestialObject,
-  UniverseFilters,
-} from '../types/universe';
+import React from 'react';
+import { Search, Eye, Compass, Move, Home } from 'lucide-react';
+import type { LayerVisibility, OpticalMode, UniverseFilters } from '../types/universe';
 import type { SceneTelemetrySnapshot } from '../engine/UniverseScene';
 
+export type ScalePreset =
+  | 'earth-orbit'
+  | 'solar-system'
+  | 'interstellar'
+  | 'milky-way'
+  | 'local-group'
+  | 'superclusters'
+  | 'observable-universe';
+
 interface Props {
-  searchableObjects: UnifiedCelestialObject[];
   telemetry: SceneTelemetrySnapshot | null;
   opticalMode: OpticalMode;
   onChangeOpticalMode: (mode: OpticalMode) => void;
-  onSelectAndFly: (id: string) => void;
-  manifest: SyncManifest | null;
-  isSyncing: boolean;
-  onOpenSyncModal: () => void;
-  showLeftPanel: boolean;
-  onToggleLeftPanel: () => void;
-  showRouteCard: boolean;
-  onToggleRouteCard: () => void;
-  showApodDrawer: boolean;
-  onToggleApodDrawer: () => void;
-  latestApod: ApodEntry | null;
+  onOpenSearch: () => void;
+  showChips: boolean;
   onToggleFreeRoam: () => void;
   onHopGalaxy: () => void;
+  onHome: () => void;
   layers: LayerVisibility;
   onChangeLayers: (layers: LayerVisibility) => void;
   filters: UniverseFilters;
   onChangeFilters: (filters: UniverseFilters) => void;
   onResetFilters: () => void;
-  onJumpScale: (
-    preset:
-      | 'earth-orbit'
-      | 'solar-system'
-      | 'interstellar'
-      | 'milky-way'
-      | 'local-group'
-      | 'superclusters'
-      | 'observable-universe'
-  ) => void;
+  onJumpScale: (preset: ScalePreset) => void;
+  mobileNav: React.ReactNode;
 }
+
+const OPTICAL_MODES: { value: OpticalMode; label: string }[] = [
+  { value: 'true-color', label: 'True colour' },
+  { value: 'apod-platesolve', label: 'Star-chart overlay' },
+  { value: 'apod-sho', label: 'Hubble palette' },
+  { value: 'infrared', label: 'Infrared (JWST)' },
+  { value: 'deep-field', label: 'Deep field' },
+  { value: 'tactical', label: 'Tactical HUD' },
+];
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
 export const TopTelemetryBar: React.FC<Props> = React.memo(
   ({
-    searchableObjects,
     telemetry,
     opticalMode,
     onChangeOpticalMode,
-    onSelectAndFly,
-    manifest,
-    isSyncing,
-    onOpenSyncModal,
-    showLeftPanel,
-    onToggleLeftPanel,
-    showRouteCard,
-    onToggleRouteCard,
-    showApodDrawer,
-    onToggleApodDrawer,
-    latestApod,
+    onOpenSearch,
+    showChips,
     onToggleFreeRoam,
     onHopGalaxy,
+    onHome,
     layers,
     onChangeLayers,
     filters,
     onChangeFilters,
     onResetFilters,
     onJumpScale,
+    mobileNav,
   }) => {
-    const [query, setQuery] = useState('');
-    const [focused, setFocused] = useState(false);
-    const inputRef = useRef<HTMLInputElement | null>(null);
-
-    const searchResults = useMemo(() => {
-      const q = query.trim().toLowerCase();
-      if (!q) return [];
-      const exact: UnifiedCelestialObject[] = [];
-      const starts: UnifiedCelestialObject[] = [];
-      const contains: UnifiedCelestialObject[] = [];
-
-      for (const item of searchableObjects) {
-        const nameL = item.name.toLowerCase();
-        const subL = item.subtitle.toLowerCase();
-        if (nameL === q) exact.push(item);
-        else if (nameL.startsWith(q)) starts.push(item);
-        else if (nameL.includes(q) || subL.includes(q)) contains.push(item);
-        if (exact.length + starts.length + contains.length > 45) break;
-      }
-      return [...exact, ...starts, ...contains].slice(0, 12);
-    }, [query, searchableObjects]);
-
-    const recentCount = manifest?.recentDiscoveries?.length || 0;
     const isFiltered =
       filters.planetTypes.length > 0 ||
       filters.habitableOnly ||
@@ -113,367 +67,193 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
       filters.maxEarthRadii < 25 ||
       filters.deepSpaceCategory !== 'ALL';
 
+    const chip = (active: boolean, color: string) =>
+      `shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition border ${
+        active ? 'text-white' : 'glass-pill text-slate-300 hover:text-white border-transparent'
+      }`;
+    const chipStyle = (active: boolean, color: string): React.CSSProperties | undefined =>
+      active ? { backgroundColor: `${color}2e`, borderColor: `${color}aa` } : undefined;
+
+    const deepPreset = (cat: 'nebula' | 'galaxy', scale: ScalePreset) => {
+      if (filters.deepSpaceCategory === cat) onResetFilters();
+      else {
+        onChangeFilters({ ...filters, actionMode: 'isolate', deepSpaceCategory: cat });
+        onJumpScale(scale);
+      }
+    };
+
+    const rocky = filters.planetTypes.length === 1 && filters.planetTypes[0] === 'Rocky';
+    const giants = filters.planetTypes.includes('Gas Giant');
+
     return (
-      <header className="pointer-events-none fixed top-0 inset-x-0 z-30 p-2.5 sm:p-3.5 flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2">
-          {/* Left: Brand & Scale HUD + Filter Toggle */}
-          <div className="pointer-events-auto flex items-center gap-2">
-            <button
-              onClick={onToggleLeftPanel}
-              className={`flex items-center gap-2 px-3 py-2 rounded-xl transition text-xs font-medium ${
-                showLeftPanel
-                  ? 'bg-cyan-500/25 border border-cyan-400/70 text-cyan-100 shadow-[0_0_24px_rgba(34,211,238,0.28)] backdrop-blur-xl'
-                  : 'glass-pill text-slate-200 hover:border-cyan-400/40 hover:text-white'
-              }`}
-              title="Toggle 3D Layers & Smart Celestial Filters"
-            >
-              <SlidersHorizontal className="w-4 h-4 text-cyan-400" />
-              <span className="hidden sm:inline">Layers & Filters</span>
-              {isFiltered && (
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_#22d3ee]" />
-              )}
-            </button>
-
-            <div className="hidden lg:flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl glass-pill border-cyan-400/20">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse" />
-                <span className="font-display text-xs font-bold tracking-wider text-white uppercase">
-                  God&apos;s Universe
-                </span>
-              </div>
-              <span className="text-white/15">|</span>
-              <div className="font-mono text-[11px] text-cyan-300 tracking-wide">
-                {telemetry?.scaleLabel || 'EARTH ORBIT // LEO–GEO'}
-              </div>
-              {telemetry && (
-                <>
-                  <span className="font-mono text-[11px] text-slate-400">
-                    {telemetry.cameraSpanLabel}
-                  </span>
-                  <span className="hidden 2xl:inline text-white/15">|</span>
-                  <span className="hidden 2xl:inline font-mono text-[10.5px] text-cyan-200/80">
-                    {telemetry.pointingRaDec}
-                  </span>
-                  <span className="text-white/15">|</span>
-                  <span className="font-mono text-[10px] text-emerald-400">
-                    {telemetry.fps} FPS
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Center: Omnisearch across Planets, 6,400+ Exoplanets, Stars, Satellites, Nebulae & Galaxies */}
-          <div className="pointer-events-auto relative flex-1 max-w-md">
-            <div className="relative flex items-center">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" />
-              <input
-                ref={inputRef}
-                type="text"
-                value={query}
-                onFocus={() => setFocused(true)}
-                onBlur={() => setTimeout(() => setFocused(false), 180)}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search Bode's Galaxy, Rosette, Horsehead, M81, TRAPPIST-1e, ISS..."
-                className="w-full pl-9 pr-8 py-2 rounded-xl glass-pill focus:border-cyan-400/75 focus:outline-none text-xs sm:text-sm text-white placeholder:text-slate-400/80 transition"
-              />
-              {query && (
-                <button
-                  onClick={() => setQuery('')}
-                  className="absolute right-2.5 text-slate-400 hover:text-white"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {focused && searchResults.length > 0 && (
-              <div className="animate-panel-in absolute top-full mt-1.5 inset-x-0 rounded-2xl glass-panel overflow-hidden max-h-80 overflow-y-auto z-50">
-                {searchResults.map((item) => (
-                  <button
-                    key={item.id}
-                    onMouseDown={() => {
-                      onSelectAndFly(item.id);
-                      setQuery('');
-                      setFocused(false);
-                    }}
-                    className="w-full px-3.5 py-2.5 text-left hover:bg-cyan-500/15 flex items-center justify-between gap-2 border-b border-white/[0.06] last:border-none transition"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: item.color }}
-                        />
-                        <span className="font-display text-xs sm:text-sm font-semibold text-white truncate">
-                          {item.name}
-                        </span>
-                        {item.isRecent && (
-                          <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                            NEW
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-slate-400 truncate mt-0.5">{item.subtitle}</p>
-                    </div>
-                    <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-md bg-white/[0.05] text-slate-300 shrink-0">
-                      {item.category}
-                    </span>
-                  </button>
-                ))}
-              </div>
+      <header className="pointer-events-none fixed top-0 inset-x-0 z-30 p-2.5 sm:p-3 flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          {/* Brand + where-am-I readout */}
+          <div className="pointer-events-auto hidden md:flex items-center gap-2.5 px-3 py-2 rounded-xl glass-pill min-w-0">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] shrink-0" />
+            <span className="font-display text-xs font-bold tracking-wider text-white uppercase whitespace-nowrap">
+              God&apos;s Universe
+            </span>
+            <span className="text-white/15">|</span>
+            <span className="font-mono text-[11px] text-cyan-300 truncate max-w-[16rem]" title="Current zoom level">
+              {telemetry?.scaleLabel || 'EARTH ORBIT'}
+            </span>
+            {telemetry && (
+              <span className="hidden lg:inline font-mono text-[11px] text-slate-400 whitespace-nowrap" title="Width of the current view">
+                {telemetry.cameraSpanLabel}
+              </span>
             )}
           </div>
 
-          {/* Right: NASA APOD Feed, Cosmic Route Toggle, Optical Mode & Continual Data Auto-Sync */}
-          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
-            <button
-              onClick={onToggleApodDrawer}
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition text-xs font-medium ${
-                showApodDrawer
-                  ? 'bg-cyan-500/25 border border-cyan-400/75 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.28)] backdrop-blur-xl'
-                  : 'glass-pill text-slate-200 hover:border-cyan-400/45 hover:text-white'
-              }`}
-              title={
-                latestApod
-                  ? `NASA Photo of the Day (${latestApod.date}): ${latestApod.title}`
-                  : 'NASA Astronomy Picture of the Day (APOD) & Astrometry Plate-Solver'
-              }
-            >
-              <Camera className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="hidden md:inline font-mono text-[11px]">NASA APOD</span>
-            </button>
+          {/* Search trigger — opens the command palette */}
+          <button
+            onClick={onOpenSearch}
+            className="pointer-events-auto flex-1 md:max-w-md md:mx-auto flex items-center gap-2.5 pl-3.5 pr-2 py-2 rounded-xl glass-pill hover:border-cyan-400/50 text-left transition group min-w-0"
+            aria-label="Search the universe"
+          >
+            <Search className="w-4 h-4 text-cyan-300 shrink-0" />
+            <span className="flex-1 text-[13px] text-slate-400 group-hover:text-slate-200 truncate">
+              Search planets, stars, spacecraft…
+            </span>
+            <kbd className="hidden sm:inline px-1.5 py-0.5 rounded-md bg-white/[0.08] font-mono text-[10px] text-slate-400 shrink-0">
+              {isMac ? '⌘K' : 'Ctrl K'}
+            </kbd>
+          </button>
 
-            <button
-              onClick={onToggleRouteCard}
-              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition text-xs font-medium ${
-                showRouteCard
-                  ? 'bg-emerald-500/25 border border-emerald-400/70 text-emerald-100 shadow-[0_0_20px_rgba(52,211,153,0.22)] backdrop-blur-xl'
-                  : 'glass-pill text-slate-200 hover:border-emerald-400/40 hover:text-white'
-              }`}
-              title="Cosmic Distance & Travel Calculator (Google Maps for the Universe)"
+          {/* View style */}
+          <label className="pointer-events-auto hidden sm:flex items-center gap-1.5 px-2.5 py-2 rounded-xl glass-pill" title="Change how the sky is rendered">
+            <Eye className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="sr-only">View style</span>
+            <select
+              value={opticalMode}
+              onChange={(e) => onChangeOpticalMode(e.target.value as OpticalMode)}
+              className="bg-transparent text-xs text-slate-200 focus:outline-none cursor-pointer"
             >
-              <Navigation className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden xl:inline">Cosmic Distance</span>
-            </button>
+              {OPTICAL_MODES.map((m) => (
+                <option key={m.value} value={m.value} className="bg-slate-950">
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-            {/* Optical Sensor Selector (Including NASA APOD Astrometry & SHO Narrowband!) */}
-            <div className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl glass-pill">
-              <Eye className="w-3.5 h-3.5 text-cyan-400 mr-0.5" />
-              <select
-                value={opticalMode}
-                onChange={(e) => onChangeOpticalMode(e.target.value as OpticalMode)}
-                className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none cursor-pointer pr-1"
-                title="Sensor Optical & APOD Calibration Filter"
-              >
-                <option value="true-color" className="bg-slate-950">TRUE COLOR (APOD LRGB)</option>
-                <option value="apod-platesolve" className="bg-slate-950">APOD PLATE-SOLVE</option>
-                <option value="apod-sho" className="bg-slate-950">APOD SHO NARROWBAND</option>
-                <option value="tactical" className="bg-slate-950">TACTICAL HUD</option>
-                <option value="infrared" className="bg-slate-950">JWST THERMAL IR</option>
-                <option value="deep-field" className="bg-slate-950">DEEP FIELD</option>
-              </select>
-            </div>
-
-            {/* Live Data Auto-Sync & New Discoveries Pill */}
-            <button
-              onClick={onOpenSyncModal}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl glass-pill hover:border-cyan-400/50 text-xs transition"
-              title="Data Sources, Auto-Sync Schedule & New Planetary Discoveries"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`}
-              />
-              <span className="hidden xl:inline text-slate-200 font-medium">Data Sync</span>
-              {recentCount > 0 && (
-                <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/40 text-[10px] font-mono text-amber-300">
-                  <Sparkles className="w-2.5 h-2.5" />
-                  {recentCount}
-                </span>
-              )}
-            </button>
+        {/* Mobile: tool icons */}
+        <div className="md:hidden flex items-center gap-2">
+          {mobileNav}
+          <div className="ml-auto pointer-events-auto px-2.5 py-1.5 rounded-xl glass-pill font-mono text-[10px] text-cyan-300 max-w-[42%] truncate">
+            {telemetry?.scaleLabel || 'EARTH ORBIT'}
           </div>
         </div>
 
-        {/* Sleek Floating Quick-Filter & Free-Roam Navigation Chips */}
-        {!showLeftPanel && (
-          <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 self-start">
+        {/* Quick navigation & filter chips — one line, scrolls sideways */}
+        {showChips && (
+          <div className="pointer-events-auto hidden md:flex items-center gap-1.5 overflow-x-auto no-scrollbar mask-fade-right">
+            <button
+              onClick={onHome}
+              className={chip(false, '#22d3ee')}
+              title="Fly back to Earth (H)"
+            >
+              <span className="flex items-center gap-1">
+                <Home className="w-3 h-3 text-cyan-300" /> Earth
+              </span>
+            </button>
             <button
               onClick={onToggleFreeRoam}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
-                telemetry?.freeRoamDragMode || telemetry?.isFreeRoam
-                  ? 'bg-emerald-500/25 border border-emerald-400/70 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.22)] backdrop-blur-md'
-                  : 'glass-pill text-slate-300 hover:border-emerald-400/45 hover:text-white'
-              }`}
-              title="Untether camera from Milky Way / Earth! Toggle Left-Drag Pan (or use Right-Drag / WASD + Shift anytime, Double-Click any galaxy to anchor)"
+              className={chip(Boolean(telemetry?.freeRoamDragMode || telemetry?.isFreeRoam), '#34d399')}
+              style={chipStyle(Boolean(telemetry?.freeRoamDragMode || telemetry?.isFreeRoam), '#34d399')}
+              title="Unlock the camera and roam freely (or right-drag anytime)"
             >
-              <Move className="w-3 h-3 text-emerald-400" />
-              <span>
+              <span className="flex items-center gap-1">
+                <Move className="w-3 h-3 text-emerald-400" />
                 {telemetry?.freeRoamDragMode
-                  ? 'Free Roam: PAN ON'
+                  ? 'Free roam: drag to pan'
                   : telemetry?.isFreeRoam
-                    ? 'Free Roam (Untethered)'
-                    : `Locked: ${telemetry?.anchorName || 'Earth'}`}
+                    ? 'Free roaming'
+                    : `Following ${telemetry?.anchorName || 'Earth'}`}
+              </span>
+            </button>
+            <button onClick={onHopGalaxy} className={chip(false, '#818cf8')} title="Warp to a random galaxy (G)">
+              <span className="flex items-center gap-1">
+                <Compass className="w-3 h-3 text-indigo-300" /> Random galaxy
               </span>
             </button>
 
-            <button
-              onClick={onHopGalaxy}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium glass-pill text-indigo-200 border-indigo-400/35 hover:border-indigo-300/75 hover:bg-indigo-500/20 transition"
-              title="Warp to another galaxy, colliding group, ring galaxy, or JWST deep-field supercluster outside the Milky Way!"
-            >
-              <Compass className="w-3 h-3 text-indigo-300" />
-              <span>Hop Galaxy ✦</span>
-            </button>
+            <span className="shrink-0 w-px h-4 bg-white/15 mx-1" />
 
             <button
-              onClick={() => onChangeLayers({ ...layers, simGrid: !layers.simGrid })}
-              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
-                layers.simGrid
-                  ? 'bg-cyan-500/20 border border-cyan-400/55 text-cyan-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
-              title="Toggle Logarithmic Astrometric Range Grid & Celestial Coordinates"
+              onClick={() => deepPreset('nebula', 'milky-way')}
+              className={chip(filters.deepSpaceCategory === 'nebula', '#fb7185')}
+              style={chipStyle(filters.deepSpaceCategory === 'nebula', '#fb7185')}
             >
-              Sim Grid
+              Nebulae
             </button>
             <button
-              onClick={() => {
-                const active = filters.deepSpaceCategory === 'nebula';
-                if (active) {
-                  onResetFilters();
-                } else {
-                  onChangeFilters({
-                    ...filters,
-                    actionMode: 'isolate',
-                    deepSpaceCategory: 'nebula',
-                  });
-                  onJumpScale('milky-way');
-                }
-              }}
-              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                filters.deepSpaceCategory === 'nebula'
-                  ? 'bg-rose-500/25 border border-rose-400/60 text-rose-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
+              onClick={() => deepPreset('galaxy', 'local-group')}
+              className={chip(filters.deepSpaceCategory === 'galaxy', '#818cf8')}
+              style={chipStyle(filters.deepSpaceCategory === 'galaxy', '#818cf8')}
             >
-              Nebulae (430+)
-            </button>
-            <button
-              onClick={() => {
-                const active = filters.deepSpaceCategory === 'galaxy';
-                if (active) {
-                  onResetFilters();
-                } else {
-                  onChangeFilters({
-                    ...filters,
-                    actionMode: 'isolate',
-                    deepSpaceCategory: 'galaxy',
-                  });
-                  onJumpScale('local-group');
-                }
-              }}
-              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                filters.deepSpaceCategory === 'galaxy'
-                  ? 'bg-indigo-500/25 border border-indigo-400/60 text-indigo-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
-            >
-              Galaxies (1,850+)
+              Galaxies
             </button>
             <button
               onClick={() =>
-                onChangeLayers({ ...layers, constellations: !layers.constellations })
+                rocky
+                  ? onResetFilters()
+                  : onChangeFilters({ ...filters, actionMode: 'isolate', planetTypes: ['Rocky'], minEarthRadii: 0.1, maxEarthRadii: 1.6 })
               }
-              className={`hidden lg:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                layers.constellations
-                  ? 'bg-cyan-500/18 border border-cyan-400/45 text-cyan-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
+              className={chip(rocky, '#fb923c')}
+              style={chipStyle(rocky, '#fb923c')}
+            >
+              Rocky worlds
+            </button>
+            <button
+              onClick={() =>
+                giants
+                  ? onResetFilters()
+                  : onChangeFilters({
+                      ...filters,
+                      actionMode: 'isolate',
+                      planetTypes: ['Gas Giant', 'Ice Giant'],
+                      minEarthRadii: 3.5,
+                      maxEarthRadii: 25,
+                    })
+              }
+              className={chip(giants, '#c084fc')}
+              style={chipStyle(giants, '#c084fc')}
+            >
+              Gas giants
+            </button>
+            <button
+              onClick={() => onChangeLayers({ ...layers, habitableZones: !layers.habitableZones })}
+              className={chip(layers.habitableZones, '#34d399')}
+              style={chipStyle(layers.habitableZones, '#34d399')}
+            >
+              Habitable zones
+            </button>
+            <button
+              onClick={() => onChangeLayers({ ...layers, constellations: !layers.constellations })}
+              className={chip(layers.constellations, '#22d3ee')}
+              style={chipStyle(layers.constellations, '#22d3ee')}
             >
               Constellations
             </button>
             <button
               onClick={() => onChangeLayers({ ...layers, zodiacSigns: !layers.zodiacSigns })}
-              className={`hidden lg:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                layers.zodiacSigns
-                  ? 'bg-amber-500/18 border border-amber-400/45 text-amber-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
+              className={chip(layers.zodiacSigns, '#fbbf24')}
+              style={chipStyle(layers.zodiacSigns, '#fbbf24')}
             >
-              Zodiac Signs
-            </button>
-            <button
-              onClick={() =>
-                onChangeLayers({ ...layers, habitableZones: !layers.habitableZones })
-              }
-              className={`hidden xl:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                layers.habitableZones
-                  ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
-            >
-              Habitable Zones
-            </button>
-            <button
-              onClick={() => {
-                const active =
-                  filters.planetTypes.length === 1 && filters.planetTypes[0] === 'Rocky';
-                if (active) onResetFilters();
-                else
-                  onChangeFilters({
-                    ...filters,
-                    actionMode: 'isolate',
-                    planetTypes: ['Rocky'],
-                    minEarthRadii: 0.1,
-                    maxEarthRadii: 1.6,
-                  });
-              }}
-              className={`hidden xl:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                filters.planetTypes.length === 1 && filters.planetTypes[0] === 'Rocky'
-                  ? 'bg-orange-500/25 border border-orange-400/60 text-orange-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
-            >
-              Rocky Worlds
-            </button>
-            <button
-              onClick={() => {
-                const active = filters.planetTypes.includes('Gas Giant');
-                if (active) onResetFilters();
-                else
-                  onChangeFilters({
-                    ...filters,
-                    actionMode: 'isolate',
-                    planetTypes: ['Gas Giant', 'Ice Giant'],
-                    minEarthRadii: 3.5,
-                    maxEarthRadii: 25,
-                  });
-              }}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
-                filters.planetTypes.includes('Gas Giant')
-                  ? 'bg-purple-500/25 border border-purple-400/60 text-purple-200 backdrop-blur-md'
-                  : 'glass-pill text-slate-400 hover:text-white'
-              }`}
-            >
-              Gas Giants
+              Zodiac
             </button>
             {isFiltered && (
               <button
                 onClick={onResetFilters}
-                className="px-2.5 py-1 rounded-full text-[11px] font-mono bg-white/10 hover:bg-white/20 text-white transition"
+                className="shrink-0 px-2.5 py-1 rounded-full text-[11px] bg-white/15 hover:bg-white/25 text-white transition"
               >
-                Clear Filter ×
+                Clear filter ×
               </button>
             )}
           </div>
         )}
-
-        {/* Compact mobile scale banner */}
-        <div className="flex lg:hidden items-center justify-between px-3 py-1 rounded-lg glass-pill text-[10px] font-mono text-cyan-300">
-          <span className="truncate">{telemetry?.scaleLabel || 'EARTH ORBIT'}</span>
-          <span className="text-slate-400 shrink-0 ml-2">{telemetry?.cameraSpanLabel}</span>
-        </div>
       </header>
     );
   }

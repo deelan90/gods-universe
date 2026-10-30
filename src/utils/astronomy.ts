@@ -9,6 +9,7 @@ import type {
   StarRecord,
   UnifiedCelestialObject,
 } from '../types/universe';
+import { SPACECRAFT_FLEET } from './spacecraft';
 
 export const KM_PER_AU = 149_597_870.7;
 export const AU_PER_LY = 63_241.07708426628;
@@ -459,6 +460,39 @@ export function buildUnifiedCatalog(params: {
       basePosLy: d.posLy,
       raw: d,
     });
+  }
+
+  // 2b. Live deep-space spacecraft fleet (positions come from JPL Horizons in the engine)
+  for (const craft of SPACECRAFT_FLEET) {
+    const existing = byId.get(craft.id);
+    const statusNote =
+      craft.status === 'silent'
+        ? 'No longer transmitting — position follows its known escape trajectory.'
+        : craft.status === 'uncertain'
+          ? 'Mission status uncertain — position follows its last published trajectory.'
+          : `Operated by ${craft.agency}. Launched ${craft.launched}.`;
+    const obj: UnifiedCelestialObject = {
+      id: craft.id,
+      name: craft.name,
+      subtitle: `Spacecraft • ${craft.where}`,
+      category: 'spacecraft',
+      color: craft.color,
+      wikiTitle: craft.wikiTitle,
+      nasaQuery: craft.nasaQuery,
+      fallbackQuery: 'Spacecraft',
+      heroImage: existing?.heroImage ?? null,
+      renderAs25D: false,
+      funFacts: [statusNote, ...craft.funFacts],
+      basePosLy: existing?.basePosLy ?? [0, 0, 0],
+      raw: existing?.raw,
+    };
+    if (existing) {
+      const idx = searchable.indexOf(existing);
+      if (idx >= 0) searchable[idx] = obj;
+      byId.set(obj.id, obj);
+    } else {
+      register(obj);
+    }
   }
 
   // 3. Satellites

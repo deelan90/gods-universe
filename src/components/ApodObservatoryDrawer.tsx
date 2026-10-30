@@ -57,7 +57,7 @@ export const ApodObservatoryDrawer: React.FC<Props> = React.memo(
         : 'SOLAR EPHEMERIS // LIVE J2000';
 
     return (
-      <section className="pointer-events-auto animate-panel-in w-[380px] max-w-[93vw] max-h-[calc(100vh-155px)] flex flex-col rounded-2xl glass-panel border border-cyan-400/25 overflow-hidden text-xs shadow-2xl">
+      <section className="pointer-events-auto animate-panel-in w-full sm:w-[380px] max-h-[calc(100dvh-13rem)] sm:max-h-[calc(100dvh-12.25rem)] flex flex-col rounded-2xl glass-panel border border-cyan-400/25 overflow-hidden text-xs shadow-2xl">
         {/* Top Astrometric Plate-Solve Header */}
         <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-cyan-400/20 bg-[#030917]/90">
           <div className="flex items-center gap-2 min-w-0">
