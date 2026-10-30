@@ -959,6 +959,84 @@ export async function syncDeepSpace() {
 }
 
 /**
+ * 5. Sync NASA Astronomy Picture of the Day (APOD) Observatory Feed from science.nasa.gov
+ */
+function decodeHtmlEntities(str = '') {
+  return String(str)
+    .replace(/&#8211;/g, '–')
+    .replace(/&#8212;/g, '—')
+    .replace(/&#8216;|&#8217;/g, '’')
+    .replace(/&#8220;|&#8221;/g, '"')
+    .replace(/&#038;|&amp;/g, '&')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function syncNasaApod() {
+  console.log('[Sync] Fetching latest NASA Astronomy Picture of the Day (APOD) observatory feed...');
+  const url = 'https://science.nasa.gov/wp-json/wp/v2/image-article?search=APOD&per_page=18&_embed';
+  const res = await fetchWithTimeout(url, 25000);
+  const items = await res.json();
+  if (!Array.isArray(items)) return [];
+
+  const entries = [];
+  for (const it of items) {
+    const rawTitle = decodeHtmlEntities((it?.title?.rendered || '').replace(/<[^>]+>/g, ''));
+    if (!rawTitle) continue;
+    const cleanTitle = rawTitle.replace(/^APOD:\s*[^–—-]+[–—-]\s*/i, '').trim() || rawTitle;
+
+    const mediaObj = it?._embedded?.['wp:featuredmedia']?.[0];
+    let imageUrl =
+      mediaObj?.source_url ||
+      mediaObj?.media_details?.sizes?.full?.source_url ||
+      '';
+
+    const contentHtml = String(it?.content?.rendered || '');
+    if (!imageUrl) {
+      const mImg = contentHtml.match(/<img[^>]+src="([^"]+)"/i);
+      if (mImg && !mImg[1].includes('logo')) imageUrl = mImg[1];
+    }
+    if (!imageUrl) continue;
+
+    const expIdx = contentHtml.indexOf('Explanation:');
+    const creditIdx = contentHtml.search(/Image Credit|Credit\s*&|Video Credit/i);
+    let credit = 'NASA / APOD';
+    if (creditIdx >= 0 && (expIdx < 0 || creditIdx < expIdx)) {
+      const creditSlice = contentHtml.slice(creditIdx, expIdx > creditIdx ? expIdx : creditIdx + 280);
+      credit = decodeHtmlEntities(creditSlice.replace(/<[^>]+>/g, ' '))
+        .replace(/^(Image Credit\s*(&\s*Copyright)?|Credit|Video Credit)\s*:?\s*/i, '')
+        .slice(0, 140);
+    }
+
+    const expRaw = expIdx >= 0 ? contentHtml.slice(expIdx + 12) : String(it?.excerpt?.rendered || '');
+    const tomorrowIdx = expRaw.search(/Tomorrow['’]s picture:|<hr/i);
+    const explanation = decodeHtmlEntities(
+      (tomorrowIdx > 0 ? expRaw.slice(0, tomorrowIdx) : expRaw)
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+    ).slice(0, 950);
+
+    entries.push({
+      id: `apod-${it.id || entries.length}`,
+      date: String(it.date || '').slice(0, 10),
+      title: cleanTitle,
+      fullHeading: rawTitle,
+      explanation,
+      credit: credit || 'NASA / APOD',
+      imageUrl: imageUrl.replace(/^http:\/\//i, 'https://'),
+      articleUrl: it.link || 'https://science.nasa.gov/apod/',
+    });
+  }
+
+  console.log(`[Sync] Loaded ${entries.length} NASA APOD captures.`);
+  return entries;
+}
+
+/**
  * Master Sync Orchestrator — Writes optimized JSON bundles to public/data/ and tracks freshness
  */
 export async function runUniverseSync({ force = false, syncIntervalHours = DEFAULT_SYNC_INTERVAL_HOURS } = {}) {
@@ -1026,6 +1104,18 @@ export async function runUniverseSync({ force = false, syncIntervalHours = DEFAU
     errors.push(`Deep Space Catalog: ${err.message}`);
   }
 
+  // 5. NASA Astronomy Picture of the Day (APOD) Observatory Feed
+  let apodEntries = null;
+  try {
+    apodEntries = await syncNasaApod();
+    if (apodEntries.length > 0) {
+      await fsp.writeFile(path.join(PUBLIC_DATA_DIR, 'apod.json'), JSON.stringify(apodEntries));
+    }
+  } catch (err) {
+    console.error('[Sync] NASA APOD sync error:', err.message);
+    errors.push(`NASA APOD: ${err.message}`);
+  }
+
   // Read counts from disk in case a partial source fell back to existing file
   const finalExo = exoplanetBundle?.exoplanets || (await readJsonSafe(path.join(PUBLIC_DATA_DIR, 'exoplanets.json'), []));
   const finalStars = starBundle?.stars || (await readJsonSafe(path.join(PUBLIC_DATA_DIR, 'stars.json'), []));
@@ -1073,9 +1163,9 @@ export async function runUniverseSync({ force = false, syncIntervalHours = DEFAU
         status: 'live',
       },
       {
-        name: 'NASA Image & Video Library + JWST / Hubble / EHT Archives',
-        url: 'https://images.nasa.gov/',
-        status: 'live',
+        name: 'NASA Astronomy Picture of the Day (APOD) + JWST / Hubble Archives',
+        url: 'https://science.nasa.gov/apod/',
+        status: errors.some((e) => e.includes('APOD')) ? 'cached' : 'live',
       },
     ],
     recentDiscoveries: exoplanetBundle?.recentDiscoveries || existingManifest?.recentDiscoveries || [],

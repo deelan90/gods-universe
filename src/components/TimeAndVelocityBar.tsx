@@ -29,6 +29,7 @@ interface Props {
       | 'interstellar'
       | 'milky-way'
       | 'local-group'
+      | 'superclusters'
       | 'observable-universe'
   ) => void;
 }
@@ -82,6 +83,7 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
               ['interstellar', 'Stars & Exoplanets'],
               ['milky-way', 'Milky Way'],
               ['local-group', 'Local Group'],
+              ['superclusters', 'Virgo & Superclusters'],
               ['observable-universe', 'Observable Universe (93 Gly)'],
             ] as const
           ).map(([preset, label]) => (
@@ -93,6 +95,9 @@ export const TimeAndVelocityBar: React.FC<Props> = React.memo(
               {label}
             </button>
           ))}
+          <span className="hidden xl:inline-block pl-2 pr-1.5 text-[10px] font-mono text-cyan-300/70 border-l border-white/10 whitespace-nowrap">
+            WASD / Right-Drag: Roam • Dbl-Click: Warp
+          </span>
         </div>
 
         {/* Main Bottom Command & Real-Time Solar System Velocity Bar */}

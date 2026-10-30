@@ -6,9 +6,13 @@ import {
   RefreshCw,
   Sparkles,
   Eye,
+  Compass,
+  Camera,
+  Move,
   X,
 } from 'lucide-react';
 import type {
+  ApodEntry,
   LayerVisibility,
   OpticalMode,
   SyncManifest,
@@ -30,6 +34,11 @@ interface Props {
   onToggleLeftPanel: () => void;
   showRouteCard: boolean;
   onToggleRouteCard: () => void;
+  showApodDrawer: boolean;
+  onToggleApodDrawer: () => void;
+  latestApod: ApodEntry | null;
+  onToggleFreeRoam: () => void;
+  onHopGalaxy: () => void;
   layers: LayerVisibility;
   onChangeLayers: (layers: LayerVisibility) => void;
   filters: UniverseFilters;
@@ -42,6 +51,7 @@ interface Props {
       | 'interstellar'
       | 'milky-way'
       | 'local-group'
+      | 'superclusters'
       | 'observable-universe'
   ) => void;
 }
@@ -60,6 +70,11 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
     onToggleLeftPanel,
     showRouteCard,
     onToggleRouteCard,
+    showApodDrawer,
+    onToggleApodDrawer,
+    latestApod,
+    onToggleFreeRoam,
+    onHopGalaxy,
     layers,
     onChangeLayers,
     filters,
@@ -119,7 +134,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
               )}
             </button>
 
-            <div className="hidden lg:flex items-center gap-3 px-3.5 py-1.5 rounded-xl glass-pill">
+            <div className="hidden lg:flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl glass-pill border-cyan-400/20">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse" />
                 <span className="font-display text-xs font-bold tracking-wider text-white uppercase">
@@ -134,6 +149,10 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                 <>
                   <span className="font-mono text-[11px] text-slate-400">
                     {telemetry.cameraSpanLabel}
+                  </span>
+                  <span className="hidden 2xl:inline text-white/15">|</span>
+                  <span className="hidden 2xl:inline font-mono text-[10.5px] text-cyan-200/80">
+                    {telemetry.pointingRaDec}
                   </span>
                   <span className="text-white/15">|</span>
                   <span className="font-mono text-[10px] text-emerald-400">
@@ -206,8 +225,25 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
             )}
           </div>
 
-          {/* Right: Cosmic Route Toggle, Optical Mode & Continual Data Auto-Sync */}
+          {/* Right: NASA APOD Feed, Cosmic Route Toggle, Optical Mode & Continual Data Auto-Sync */}
           <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
+            <button
+              onClick={onToggleApodDrawer}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition text-xs font-medium ${
+                showApodDrawer
+                  ? 'bg-cyan-500/25 border border-cyan-400/75 text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.28)] backdrop-blur-xl'
+                  : 'glass-pill text-slate-200 hover:border-cyan-400/45 hover:text-white'
+              }`}
+              title={
+                latestApod
+                  ? `NASA Photo of the Day (${latestApod.date}): ${latestApod.title}`
+                  : 'NASA Astronomy Picture of the Day (APOD) & Astrometry Plate-Solver'
+              }
+            >
+              <Camera className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="hidden md:inline font-mono text-[11px]">NASA APOD</span>
+            </button>
+
             <button
               onClick={onToggleRouteCard}
               className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl transition text-xs font-medium ${
@@ -218,19 +254,21 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
               title="Cosmic Distance & Travel Calculator (Google Maps for the Universe)"
             >
               <Navigation className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden md:inline">Cosmic Distance</span>
+              <span className="hidden xl:inline">Cosmic Distance</span>
             </button>
 
-            {/* Optical Sensor Selector */}
+            {/* Optical Sensor Selector (Including NASA APOD Astrometry & SHO Narrowband!) */}
             <div className="hidden sm:flex items-center gap-1 px-2.5 py-1.5 rounded-xl glass-pill">
               <Eye className="w-3.5 h-3.5 text-cyan-400 mr-0.5" />
               <select
                 value={opticalMode}
                 onChange={(e) => onChangeOpticalMode(e.target.value as OpticalMode)}
                 className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none cursor-pointer pr-1"
-                title="Sensor Optical Filter"
+                title="Sensor Optical & APOD Calibration Filter"
               >
-                <option value="true-color" className="bg-slate-950">TRUE COLOR</option>
+                <option value="true-color" className="bg-slate-950">TRUE COLOR (APOD LRGB)</option>
+                <option value="apod-platesolve" className="bg-slate-950">APOD PLATE-SOLVE</option>
+                <option value="apod-sho" className="bg-slate-950">APOD SHO NARROWBAND</option>
                 <option value="tactical" className="bg-slate-950">TACTICAL HUD</option>
                 <option value="infrared" className="bg-slate-950">JWST THERMAL IR</option>
                 <option value="deep-field" className="bg-slate-950">DEEP FIELD</option>
@@ -257,12 +295,40 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
           </div>
         </div>
 
-        {/* Sleek Floating Quick-Filter Chips (Hidden when Left Drawer is open to keep view airy) */}
+        {/* Sleek Floating Quick-Filter & Free-Roam Navigation Chips */}
         {!showLeftPanel && (
-          <div className="pointer-events-auto hidden md:flex flex-wrap items-center gap-1.5 self-start">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 self-start">
+            <button
+              onClick={onToggleFreeRoam}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
+                telemetry?.freeRoamDragMode || telemetry?.isFreeRoam
+                  ? 'bg-emerald-500/25 border border-emerald-400/70 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.22)] backdrop-blur-md'
+                  : 'glass-pill text-slate-300 hover:border-emerald-400/45 hover:text-white'
+              }`}
+              title="Untether camera from Milky Way / Earth! Toggle Left-Drag Pan (or use Right-Drag / WASD + Shift anytime, Double-Click any galaxy to anchor)"
+            >
+              <Move className="w-3 h-3 text-emerald-400" />
+              <span>
+                {telemetry?.freeRoamDragMode
+                  ? 'Free Roam: PAN ON'
+                  : telemetry?.isFreeRoam
+                    ? 'Free Roam (Untethered)'
+                    : `Locked: ${telemetry?.anchorName || 'Earth'}`}
+              </span>
+            </button>
+
+            <button
+              onClick={onHopGalaxy}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium glass-pill text-indigo-200 border-indigo-400/35 hover:border-indigo-300/75 hover:bg-indigo-500/20 transition"
+              title="Warp to another galaxy, colliding group, ring galaxy, or JWST deep-field supercluster outside the Milky Way!"
+            >
+              <Compass className="w-3 h-3 text-indigo-300" />
+              <span>Hop Galaxy ✦</span>
+            </button>
+
             <button
               onClick={() => onChangeLayers({ ...layers, simGrid: !layers.simGrid })}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
+              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-mono transition ${
                 layers.simGrid
                   ? 'bg-cyan-500/20 border border-cyan-400/55 text-cyan-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -285,7 +351,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                   onJumpScale('milky-way');
                 }
               }}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 filters.deepSpaceCategory === 'nebula'
                   ? 'bg-rose-500/25 border border-rose-400/60 text-rose-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -307,7 +373,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                   onJumpScale('local-group');
                 }
               }}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden md:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 filters.deepSpaceCategory === 'galaxy'
                   ? 'bg-indigo-500/25 border border-indigo-400/60 text-indigo-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -319,7 +385,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
               onClick={() =>
                 onChangeLayers({ ...layers, constellations: !layers.constellations })
               }
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden lg:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 layers.constellations
                   ? 'bg-cyan-500/18 border border-cyan-400/45 text-cyan-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -329,7 +395,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
             </button>
             <button
               onClick={() => onChangeLayers({ ...layers, zodiacSigns: !layers.zodiacSigns })}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden lg:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 layers.zodiacSigns
                   ? 'bg-amber-500/18 border border-amber-400/45 text-amber-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -341,7 +407,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
               onClick={() =>
                 onChangeLayers({ ...layers, habitableZones: !layers.habitableZones })
               }
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden xl:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 layers.habitableZones
                   ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'
@@ -363,7 +429,7 @@ export const TopTelemetryBar: React.FC<Props> = React.memo(
                     maxEarthRadii: 1.6,
                   });
               }}
-              className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
+              className={`hidden xl:inline-flex px-2.5 py-1 rounded-full text-[11px] font-medium transition ${
                 filters.planetTypes.length === 1 && filters.planetTypes[0] === 'Rocky'
                   ? 'bg-orange-500/25 border border-orange-400/60 text-orange-200 backdrop-blur-md'
                   : 'glass-pill text-slate-400 hover:text-white'

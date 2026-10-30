@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastSyncedAt": "2026-10-29T13:50:26.785Z",
+  "lastSyncedAt": "2026-10-30T01:39:32.231Z",
   "nextScheduledSyncAt": "2026-11-01T09:09:18.206Z",
   "syncIntervalHours": 72,
   "durationMs": 9997,
@@ -11,7 +11,7 @@
     "zodiacSigns": 12,
     "satellites": 458,
     "solarSystemBodies": 11,
-    "deepSpaceObjects": 2649
+    "deepSpaceObjects": 2663
   },
   "sources": [
     {
@@ -35,8 +35,8 @@
       "status": "live"
     },
     {
-      "name": "NASA Image & Video Library + JWST / Hubble / EHT Archives",
-      "url": "https://images.nasa.gov/",
+      "name": "NASA Astronomy Picture of the Day (APOD) + JWST / Hubble Archives",
+      "url": "https://science.nasa.gov/apod/",
       "status": "live"
     }
   ],

@@ -20,7 +20,24 @@ export type PlanetComposition =
   | 'Gas Giant'
   | 'Lava World';
 
-export type OpticalMode = 'true-color' | 'tactical' | 'infrared' | 'deep-field';
+export type OpticalMode =
+  | 'true-color'
+  | 'apod-platesolve'
+  | 'apod-sho'
+  | 'tactical'
+  | 'infrared'
+  | 'deep-field';
+
+export interface ApodEntry {
+  id: string;
+  date: string;
+  title: string;
+  fullHeading: string;
+  explanation: string;
+  credit: string;
+  imageUrl: string;
+  articleUrl: string;
+}
 
 export type FilterActionMode = 'isolate' | 'highlight' | 'color-group';
 

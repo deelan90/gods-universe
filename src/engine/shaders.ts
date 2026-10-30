@@ -759,6 +759,8 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
     uniforms: {
       uTime: { value: 0 },
       uGlobalFade: { value: 1.0 },
+      uPlateSolve: { value: 0.0 },
+      uNarrowbandSHO: { value: 0.0 },
     },
     vertexShader: /* glsl */ `
       #include <common>
@@ -827,6 +829,8 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
       ${GLSL_SAFE_MATH}
 
       uniform float uTime;
+      uniform float uPlateSolve;
+      uniform float uNarrowbandSHO;
 
       varying vec2 vLocal;
       varying float vMorph;
@@ -873,49 +877,53 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
         float rOuter = length(p);
         if (rOuter > 1.0) discard;
 
-        float edgeVignette = smoothstep(1.0, 0.62, rOuter);
+        float edgeVignette = smoothstep(1.0, 0.60, rOuter);
         vec3 col = vec3(0.0);
         float alpha = 0.0;
 
         if (vMorph < 1.5) {
-          // 0 = Spiral Galaxy, 1 = Barred Spiral Galaxy
+          // 0 = Spiral Galaxy, 1 = Barred Spiral Galaxy (APOD Broadband LRGB + H-alpha Calibrated!)
           float ax = max(0.22, vAxisRatio);
           vec2 q = vec2(p.x, p.y / ax);
           float r = length(q);
           if (r > 1.02) discard;
 
           float theta = safeAtan(q.y, q.x);
-          float spin = uTime * 0.06 * (fract(vSeed * 7.3) > 0.5 ? 1.0 : -1.0);
+          float spin = uTime * 0.05 * (fract(vSeed * 7.3) > 0.5 ? 1.0 : -1.0);
           float winding = 3.8 + fract(vSeed * 3.1) * 2.4;
-          float logR = log(r + 0.085);
+          float logR = log(r + 0.082);
 
           float armPhase = 2.0 * (theta + spin) - winding * logR + vSeed * 6.28318;
           float armWave = 0.5 + 0.5 * cos(armPhase);
           float subArm = 0.5 + 0.5 * cos(armPhase * 2.0 + 1.1);
-          float flocculence = fbm2(q * 6.5 + vec2(vSeed * 5.0));
+          float flocculence = fbm2(q * 6.8 + vec2(vSeed * 5.0));
 
-          float arms = safePow(armWave, 2.4) * (0.65 + 0.55 * flocculence) + subArm * 0.18 * flocculence;
-          float diskEnv = exp(-r * 3.35) * smoothstep(1.0, 0.72, r);
-          float bulge = exp(-r * r * 24.0);
+          // Concave dark spiral dust lane absorption (signature of NASA APOD galaxy astrophotography!)
+          float dustWave = 0.5 + 0.5 * cos(armPhase + 0.72);
+          float dustAbsorb = 1.0 - 0.54 * safePow(dustWave, 3.0) * smoothstep(0.32, 0.78, flocculence) * smoothstep(0.06, 0.22, r) * exp(-r * 1.9);
+
+          float arms = safePow(armWave, 2.3) * (0.68 + 0.58 * flocculence) + subArm * 0.20 * flocculence;
+          float diskEnv = exp(-r * 3.25) * smoothstep(1.0, 0.70, r);
+          float tidalHalo = exp(-safePow(r, 0.72) * 3.4) * smoothstep(1.0, 0.55, r) * 0.24;
+          float bulge = exp(-r * r * 25.0);
 
           float bar = 0.0;
           if (vMorph > 0.5) {
-            // Luminous stellar bar for SB galaxies
-            bar = exp(-q.y * q.y * 52.0) * exp(-q.x * q.x * 8.5) * 0.85;
+            bar = exp(-q.y * q.y * 54.0) * exp(-q.x * q.x * 8.2) * 0.9;
           }
 
-          // H-II star-forming knots along spiral arms
-          float hiiKnots = smoothstep(0.62, 0.88, flocculence) * safePow(armWave, 3.2) * exp(-r * 2.4) * smoothstep(0.08, 0.24, r);
+          // 656.3 nm H-alpha star-forming crimson/magenta knots studded along spiral arms
+          float hiiKnots = smoothstep(0.60, 0.86, flocculence) * safePow(armWave, 3.1) * exp(-r * 2.3) * smoothstep(0.07, 0.22, r);
 
-          vec3 coreCol = vec3(1.0, 0.91, 0.72);
-          vec3 armCol = mix(vPrimaryCol, vec3(0.55, 0.82, 1.0), 0.45);
-          vec3 hiiCol = vec3(0.98, 0.36, 0.68);
+          vec3 coreCol = vec3(1.0, 0.92, 0.75);
+          vec3 armCol = mix(vPrimaryCol, vec3(0.48, 0.79, 1.0), 0.52);
+          vec3 hiiCol = mix(vec3(1.0, 0.25, 0.58), vec3(1.0, 0.62, 0.20), uNarrowbandSHO * 0.65);
 
-          col = coreCol * (bulge * 1.35 + bar * 0.9) +
-                armCol * diskEnv * (0.28 + arms * 0.95) +
-                hiiCol * hiiKnots * 0.95;
+          col = coreCol * (bulge * 1.42 + bar * 0.92 + tidalHalo * 0.65) +
+                armCol * diskEnv * (0.26 + arms * 1.02) * dustAbsorb +
+                hiiCol * hiiKnots * 1.12;
 
-          alpha = clamp((bulge * 1.1 + bar * 0.65 + diskEnv * (0.26 + arms * 0.68)) * edgeVignette, 0.0, 1.0);
+          alpha = clamp((bulge * 1.15 + bar * 0.68 + tidalHalo + diskEnv * (0.28 + arms * 0.72) * dustAbsorb) * edgeVignette, 0.0, 1.0);
         } else if (vMorph < 2.5) {
           // 2 = Elliptical / Lenticular Galaxy (E0-E7 / S0)
           float ax = max(0.32, vAxisRatio);
@@ -923,40 +931,49 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
           float r = length(q);
           if (r > 1.0) discard;
 
-          float core = exp(-r * r * 20.0);
-          float halo = exp(-safePow(r, 0.68) * 3.6) * smoothstep(1.0, 0.55, r);
+          float core = exp(-r * r * 22.0);
+          float halo = exp(-safePow(r, 0.66) * 3.5) * smoothstep(1.0, 0.52, r);
           vec3 coreCol = vec3(1.0, 0.94, 0.80);
-          col = mix(vPrimaryCol, coreCol, clamp(core * 1.2 + 0.25, 0.0, 1.0)) * (core * 1.15 + halo * 0.95);
-          alpha = clamp((core + halo * 0.85) * edgeVignette, 0.0, 1.0);
+          col = mix(vPrimaryCol, coreCol, clamp(core * 1.2 + 0.28, 0.0, 1.0)) * (core * 1.22 + halo * 0.98);
+          alpha = clamp((core + halo * 0.86) * edgeVignette, 0.0, 1.0);
         } else if (vMorph < 3.5) {
-          // 3 = Turbulent H-II Emission / Reflection / Star-Forming Nebula
+          // 3 = Turbulent H-II Emission / Reflection Nebula (APOD Broadband + Hubble SHO Narrowband!)
           vec2 warp = vec2(
-            fbm2(p * 2.6 + vec2(vSeed * 3.7, uTime * 0.015)),
-            fbm2(p * 2.6 + vec2(vSeed * 9.1 + 4.2, -uTime * 0.012))
+            fbm2(p * 2.6 + vec2(vSeed * 3.7, uTime * 0.014)),
+            fbm2(p * 2.6 + vec2(vSeed * 9.1 + 4.2, -uTime * 0.011))
           );
-          float gas1 = fbm2(p * 3.4 + warp * 1.45);
-          float gas2 = fbm2(p * 5.8 - warp * 1.15 + vec2(3.1));
-          float radial = exp(-rOuter * rOuter * 2.6) * edgeVignette;
+          float gas1 = fbm2(p * 3.5 + warp * 1.48);
+          float gas2 = fbm2(p * 6.0 - warp * 1.18 + vec2(3.1));
+          float radial = exp(-rOuter * rOuter * 2.5) * edgeVignette;
 
-          // Dark Bok-globule dust lane carving dramatic contrast
-          float dustLane = smoothstep(0.34, 0.56, gas2);
-          float oiiiCore = exp(-rOuter * rOuter * 6.5) * gas1;
+          // Bright photoionized shock ridge + dark Bok-globule molecular dust pillar
+          float dustLane = smoothstep(0.32, 0.56, gas2);
+          float ionRidge = exp(-abs(gas1 - 0.54) * 12.0) * dustLane;
+          float oiiiCore = exp(-rOuter * rOuter * 5.8) * gas1;
 
-          // Embedded newborn OB cluster stars inside the nebula
-          vec2 starGrid = p * 7.5 + vec2(vSeed * 11.0);
+          // Embedded newborn OB cluster stars with crisp 4-vane APOD Newtonian diffraction spikes
+          vec2 starGrid = p * 7.2 + vec2(vSeed * 11.0);
           vec2 cellId = floor(starGrid);
           vec2 cellUv = fract(starGrid) - 0.5;
           float rnd = hash21(cellId);
           float obStar = 0.0;
-          if (rnd > 0.78 && rOuter < 0.65) {
-            float dStar = length(cellUv - (vec2(fract(rnd * 13.7), fract(rnd * 29.3)) - 0.5) * 0.5);
-            obStar = exp(-dStar * dStar * 95.0) * 1.15;
+          if (rnd > 0.77 && rOuter < 0.68) {
+            vec2 dv = cellUv - (vec2(fract(rnd * 13.7), fract(rnd * 29.3)) - 0.5) * 0.48;
+            float dStar = length(dv);
+            float spikes = (exp(-abs(dv.x) * 32.0) * exp(-abs(dv.y) * 5.0) +
+                            exp(-abs(dv.y) * 32.0) * exp(-abs(dv.x) * 5.0)) * 0.55;
+            obStar = exp(-dStar * dStar * 105.0) * 1.25 + spikes;
           }
 
-          col = vPrimaryCol * gas1 * radial * (0.45 + 0.85 * dustLane) +
-                vSecondaryCol * oiiiCore * 1.05 +
-                vec3(0.88, 0.96, 1.0) * obStar * radial;
-          alpha = clamp((gas1 * 0.95 + oiiiCore * 0.55 + obStar * 0.7) * radial, 0.0, 1.0);
+          vec3 priCol = mix(vPrimaryCol, vec3(0.96, 0.65, 0.16), uNarrowbandSHO * 0.85);
+          vec3 secCol = mix(vSecondaryCol, vec3(0.08, 0.82, 0.98), uNarrowbandSHO * 0.85);
+          vec3 ridgeCol = mix(vec3(1.0, 0.58, 0.72), vec3(1.0, 0.88, 0.48), uNarrowbandSHO);
+
+          col = priCol * gas1 * radial * (0.42 + 0.88 * dustLane) +
+                ridgeCol * ionRidge * radial * 0.55 +
+                secCol * oiiiCore * 1.12 +
+                vec3(0.90, 0.97, 1.0) * obStar * radial;
+          alpha = clamp((gas1 * 0.96 + ionRidge * 0.35 + oiiiCore * 0.58 + obStar * 0.72) * radial, 0.0, 1.0);
         } else if (vMorph < 4.5) {
           // 4 = Limb-Brightened Planetary Nebula / Supernova Remnant Shock Shell
           float ax = max(0.55, vAxisRatio);
@@ -971,8 +988,11 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
           float innerCavity = exp(-r * r * 5.5) * 0.48;
           float whiteDwarf = exp(-r * r * 140.0) * 1.25;
 
-          col = vPrimaryCol * shockRing * 1.15 +
-                vSecondaryCol * innerCavity +
+          vec3 priCol = mix(vPrimaryCol, vec3(0.12, 0.86, 0.96), uNarrowbandSHO * 0.6);
+          vec3 secCol = mix(vSecondaryCol, vec3(0.98, 0.52, 0.18), uNarrowbandSHO * 0.7);
+
+          col = priCol * shockRing * 1.18 +
+                secCol * innerCavity +
                 vec3(0.92, 0.98, 1.0) * whiteDwarf;
           alpha = clamp((shockRing * 0.92 + innerCavity * 0.55 + whiteDwarf * 0.85) * edgeVignette, 0.0, 1.0);
         } else {
@@ -994,6 +1014,19 @@ export function createDeepSkySimulationMaterial(): THREE.ShaderMaterial {
           vec3 starCol = mix(vPrimaryCol, vec3(0.75, 0.9, 1.0), fract(h1 * 11.3) * 0.55);
           col = vPrimaryCol * kingCore * 0.95 + starCol * stars * halo * 1.25;
           alpha = clamp((kingCore * 0.88 + halo * 0.25 + stars * halo * 0.85) * edgeVignette, 0.0, 1.0);
+        }
+
+        // NASA APOD / Astrometry.net 1px Plate-Solve Annotation Circle & Cardinal Crosshairs!
+        if (uPlateSolve > 0.01) {
+          float fwR = max(fwidth(rOuter), 0.008);
+          float solveCircle = (1.0 - smoothstep(0.0, fwR * 1.35, abs(rOuter - 0.82))) * 0.72;
+          float minAxis = min(abs(p.x), abs(p.y));
+          float solveTicks = (1.0 - smoothstep(0.0, fwR * 1.25, minAxis)) *
+                             step(0.73, rOuter) * step(rOuter, 0.91) * 0.82;
+          float solveOverlay = max(solveCircle, solveTicks) * uPlateSolve;
+          vec3 solveCol = (vMorph < 2.5) ? vec3(0.22, 0.88, 0.98) : (vMorph < 4.5 ? vec3(0.20, 0.95, 0.68) : vec3(0.98, 0.82, 0.28));
+          col += solveCol * solveOverlay;
+          alpha = max(alpha, solveOverlay * 0.78);
         }
 
         // Simulation Highlight Target Ring when matched by active filter

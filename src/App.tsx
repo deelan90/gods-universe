@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import type {
+  ApodEntry,
   ConstellationRecord,
   DeepSpaceBundle,
   ExoplanetRecord,
@@ -15,6 +16,7 @@ import type {
 } from './types/universe';
 import { buildUnifiedCatalog } from './utils/astronomy';
 import { IS_LOCAL_DEV_HOST, resolvePublicDataUrl } from './utils/nasaImagesClient';
+import { fetchNasaApodFeed } from './utils/apodClient';
 import {
   UniverseScene,
   type SceneTelemetrySnapshot,
@@ -26,6 +28,7 @@ import { ObjectDossierDrawer } from './components/ObjectDossierDrawer';
 import { TimeAndVelocityBar } from './components/TimeAndVelocityBar';
 import { Telescope25DModal } from './components/Telescope25DModal';
 import { DataSyncModal } from './components/DataSyncModal';
+import { ApodObservatoryDrawer } from './components/ApodObservatoryDrawer';
 
 const DEFAULT_LAYERS: LayerVisibility = {
   satellites: true,
@@ -82,6 +85,8 @@ export const App: React.FC = () => {
   // Clean, spacious cinematic viewport on open; drawers toggle smoothly on demand
   const [showLeftPanel, setShowLeftPanel] = useState<boolean>(false);
   const [showRouteCard, setShowRouteCard] = useState<boolean>(false);
+  const [showApodDrawer, setShowApodDrawer] = useState<boolean>(false);
+  const [apodEntries, setApodEntries] = useState<ApodEntry[]>([]);
   const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [modal25D, setModal25D] = useState<{
     image: TelescopeImage;
@@ -180,6 +185,23 @@ export const App: React.FC = () => {
     };
   }, [loadAllUniverseData]);
 
+  // Load pre-synced + live NASA APOD (Astronomy Picture of the Day) Observatory Feed
+  useEffect(() => {
+    let active = true;
+    fetchNasaApodFeed()
+      .then((items) => {
+        if (active && items.length > 0) {
+          setApodEntries(items);
+        }
+      })
+      .catch(() => {
+        // Fallback already handled inside fetchNasaApodFeed
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // Continual Background Freshness Check on App Mount (checks every 72 hours automatically)
   useEffect(() => {
     if (!IS_LOCAL_DEV_HOST) return;
@@ -266,6 +288,17 @@ export const App: React.FC = () => {
     setModal25D({ image, spherical });
   }, []);
 
+  const handleToggleFreeRoam = useCallback(() => {
+    sceneRef.current?.toggleFreeRoam();
+  }, []);
+
+  const handleHopGalaxy = useCallback(() => {
+    const id = sceneRef.current?.flyToRandomGalaxy();
+    if (id) {
+      setSelectedId(id);
+    }
+  }, []);
+
   const handleJumpScale = useCallback(
     (
       preset:
@@ -274,6 +307,7 @@ export const App: React.FC = () => {
         | 'interstellar'
         | 'milky-way'
         | 'local-group'
+        | 'superclusters'
         | 'observable-universe'
     ) => {
       sceneRef.current?.jumpToScalePreset(preset);
@@ -299,10 +333,16 @@ export const App: React.FC = () => {
           setManifest(json.manifest);
           if (!newIntervalHours) {
             await loadAllUniverseData(true);
+            fetchNasaApodFeed().then((items) => {
+              if (items.length > 0) setApodEntries(items);
+            });
           }
         }
       } else {
         await loadAllUniverseData(true);
+        fetchNasaApodFeed().then((items) => {
+          if (items.length > 0) setApodEntries(items);
+        });
       }
     } catch {
       // Ignore if offline
@@ -346,9 +386,26 @@ export const App: React.FC = () => {
         isSyncing={isSyncing}
         onOpenSyncModal={() => setSyncModalOpen(true)}
         showLeftPanel={showLeftPanel}
-        onToggleLeftPanel={() => setShowLeftPanel((v) => !v)}
+        onToggleLeftPanel={() => {
+          setShowLeftPanel((v) => {
+            const next = !v;
+            if (next) setShowApodDrawer(false);
+            return next;
+          });
+        }}
         showRouteCard={showRouteCard}
         onToggleRouteCard={() => setShowRouteCard((v) => !v)}
+        showApodDrawer={showApodDrawer}
+        onToggleApodDrawer={() => {
+          setShowApodDrawer((v) => {
+            const next = !v;
+            if (next) setShowLeftPanel(false);
+            return next;
+          });
+        }}
+        latestApod={apodEntries[0] || null}
+        onToggleFreeRoam={handleToggleFreeRoam}
+        onHopGalaxy={handleHopGalaxy}
         layers={layers}
         onChangeLayers={handleChangeLayers}
         filters={filters}
@@ -370,6 +427,20 @@ export const App: React.FC = () => {
               telemetry?.matchedCounts || { exoplanets: 0, stars: 0, satellites: 0 }
             }
             onCloseMobile={() => setShowLeftPanel(false)}
+          />
+        </div>
+      )}
+
+      {/* Left Dock: NASA APOD (Astronomy Picture of the Day) Reference & Plate-Solve Drawer */}
+      {showApodDrawer && (
+        <div className="pointer-events-none fixed top-24 md:top-16 left-2.5 sm:left-3.5 z-30">
+          <ApodObservatoryDrawer
+            entries={apodEntries}
+            catalogById={catalogById}
+            searchableObjects={searchableObjects}
+            onClose={() => setShowApodDrawer(false)}
+            onSelectAndFly={handleSelectAndFly}
+            onInspect25D={handleOpen25DImage}
           />
         </div>
       )}
