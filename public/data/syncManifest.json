@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "lastSyncedAt": "2026-10-30T01:39:32.231Z",
-  "nextScheduledSyncAt": "2026-11-01T09:09:18.206Z",
+  "lastSyncedAt": "2026-10-31T11:46:40.325Z",
+  "nextScheduledSyncAt": "2026-11-03T11:46:40.325Z",
   "syncIntervalHours": 72,
-  "durationMs": 9997,
+  "durationMs": 8645,
   "counts": {
     "exoplanets": 6423,
     "stars": 6835,
