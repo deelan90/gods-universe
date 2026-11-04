@@ -1,9 +1,9 @@
 {
   "version": "1.0.0",
-  "lastSyncedAt": "2026-11-01T12:45:53.913Z",
-  "nextScheduledSyncAt": "2026-11-04T12:45:53.914Z",
+  "lastSyncedAt": "2026-11-04T13:52:12.551Z",
+  "nextScheduledSyncAt": "2026-11-07T13:52:12.551Z",
   "syncIntervalHours": 72,
-  "durationMs": 11884,
+  "durationMs": 12638,
   "counts": {
     "exoplanets": 6423,
     "stars": 6835,
@@ -17,7 +17,7 @@
     {
       "name": "NASA Exoplanet Archive (Caltech/IPAC TAP)",
       "url": "https://exoplanetarchive.ipac.caltech.edu/",
-      "status": "cached"
+      "status": "live"
     },
     {
       "name": "NORAD / CelesTrak GP Orbital Elements",
@@ -1004,7 +1004,5 @@
     "HD 101581 c",
     "Gl 725 A b"
   ],
-  "warnings": [
-    "NASA Exoplanet Archive: HTTP 525 for https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select%20pl_name%2Chostname%2Csy_dist%2Cpl_rade%2Cpl_bmasse%2Cpl_eqt%2Cpl_orbper%2Cpl_orbsmax%2Cpl_orbeccen%2C%20st_teff%2Cst_rad%2Cst_mass%2Cst_lum%2Cst_spectype%2Cdisc_year%2Cdisc_pubdate%2Cdisc_facility%2Cdiscoverymethod%2Cra%2Cdec%20from%20pscomppars%20where%20sy_dist%20is%20not%20null%20and%20ra%20is%20not%20null%20and%20dec%20is%20not%20null%20order%20by%20disc_year%20desc%2C%20disc_pubdate%20desc&format=json"
-  ]
+  "warnings": []
 }
