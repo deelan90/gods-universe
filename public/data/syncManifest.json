@@ -1,15 +1,15 @@
 {
   "version": "1.0.0",
-  "lastSyncedAt": "2026-11-07T12:34:50.595Z",
-  "nextScheduledSyncAt": "2026-11-10T12:34:50.595Z",
+  "lastSyncedAt": "2026-11-10T14:26:29.340Z",
+  "nextScheduledSyncAt": "2026-11-13T14:26:29.340Z",
   "syncIntervalHours": 72,
-  "durationMs": 69444,
+  "durationMs": 18713,
   "counts": {
     "exoplanets": 6436,
     "stars": 6835,
     "constellations": 89,
     "zodiacSigns": 12,
-    "satellites": 458,
+    "satellites": 456,
     "solarSystemBodies": 11,
     "deepSpaceObjects": 2663
   },
@@ -17,7 +17,7 @@
     {
       "name": "NASA Exoplanet Archive (Caltech/IPAC TAP)",
       "url": "https://exoplanetarchive.ipac.caltech.edu/",
-      "status": "live"
+      "status": "cached"
     },
     {
       "name": "NORAD / CelesTrak GP Orbital Elements",
@@ -1004,5 +1004,7 @@
     "TOI-5108 b",
     "TOI-2328 b"
   ],
-  "warnings": []
+  "warnings": [
+    "NASA Exoplanet Archive: HTTP 503 for https://exoplanetarchive.ipac.caltech.edu/TAP/sync?query=select%20pl_name%2Chostname%2Csy_dist%2Cpl_rade%2Cpl_bmasse%2Cpl_eqt%2Cpl_orbper%2Cpl_orbsmax%2Cpl_orbeccen%2C%20st_teff%2Cst_rad%2Cst_mass%2Cst_lum%2Cst_spectype%2Cdisc_year%2Cdisc_pubdate%2Cdisc_facility%2Cdiscoverymethod%2Cra%2Cdec%20from%20pscomppars%20where%20sy_dist%20is%20not%20null%20and%20ra%20is%20not%20null%20and%20dec%20is%20not%20null%20order%20by%20disc_year%20desc%2C%20disc_pubdate%20desc&format=json"
+  ]
 }
